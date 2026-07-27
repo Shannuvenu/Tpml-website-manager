@@ -542,7 +542,8 @@ export default function LivePreview({
       setAssets({});
       return;
     }
-
+    const githubService = service;
+    const config = repoConfig;
     let cancelled = false;
 
     async function loadDependencies() {
@@ -653,10 +654,10 @@ export default function LivePreview({
               try {
 
                 const file =
-                  await service.loadFile(
-                    repoConfig,
-                    path
-                  );
+  await githubService.loadFile(
+    config,
+    path
+  );
 
                 loaded[path] =
                   decodeBase64(
