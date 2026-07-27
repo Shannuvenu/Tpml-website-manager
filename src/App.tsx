@@ -257,7 +257,11 @@ export default function App() {
 
         <MonacoEditor openFile={openFile} onChange={handleEditorChange} />
 
-        <LivePreview openFile={openFile} />
+        <LivePreview
+  openFile={openFile}
+  service={token ? getGitHubService(token) : null}
+  repoConfig={repoConfig}
+/>
       </div>
 
       <StatusPanel status={status} />
