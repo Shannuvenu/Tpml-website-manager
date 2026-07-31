@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import MonacoEditor from './components/MonacoEditor';
@@ -21,13 +21,9 @@ function makeStatus(kind: StatusMessage['kind'], text: string): StatusMessage {
 const TEAM_PASSPHRASE = 'tpml-it-2026';
 
 /* =========================================================
-   VISUAL EDITOR
+   VISUAL EDITOR — unchanged from previous version
    ========================================================= */
 
-// Block-list, not allow-list: anything NOT here is a candidate for editing
-// as long as its content is still just text plus whitelisted inline
-// formatting. This is what makes "edit anything with real text" actually
-// true — adding tags one at a time to an allow-list never gets there.
 const BLOCKED_TAGS = [
   'html', 'head', 'body',
   'div', 'section', 'main', 'header', 'footer', 'nav', 'article', 'aside',
@@ -37,9 +33,6 @@ const BLOCKED_TAGS = [
   'source', 'track', 'br', 'hr', 'img', 'input', 'select', 'option', 'textarea',
 ];
 
-// 'br' included — real content on this site nests <br> inside names/addresses
-// (e.g. "Ramachandra<br>Guha"). Without it, every element containing a line
-// break gets rejected as "unrecognized nested tag."
 const INLINE_ALLOWED_TAGS = ['b', 'strong', 'i', 'em', 'u', 'a', 'br'];
 
 interface EditableRange {
@@ -66,7 +59,7 @@ function scanBalanced(html: string, pos: number, tagName: string): number | null
       }
       continue;
     }
-    if (name === 'br') continue; // self-closing, never wraps anything — always fine
+    if (name === 'br') continue;
     if (!INLINE_ALLOWED_TAGS.includes(name)) return null;
   }
   return null;
@@ -207,13 +200,6 @@ function VisualEditor({ openFile, service, repoConfig, onContentChange }: Visual
     if (el.innerHTML !== sanitized) el.innerHTML = sanitized;
   }
 
-  /**
-   * Matches live rendered elements to raw-string ranges by CONTENT, not
-   * strict position — with a small lookahead to resync after a mismatch.
-   * This is what stops one odd element from disabling editing for the
-   * entire page: an element that can't be matched is simply left
-   * read-only, and matching continues normally for everything after it.
-   */
   function handleIframeLoad() {
     const doc = iframeRef.current?.contentDocument;
     if (!doc || !doc.body) return;
@@ -245,7 +231,7 @@ function VisualEditor({ openFile, service, repoConfig, onContentChange }: Visual
         rangePtr = foundAt + 1;
       } else {
         skippedCount++;
-        el.title = 'This part can\'t be edited visually — use Code mode.';
+        el.title = "This part can't be edited visually — use Code mode.";
         el.style.opacity = '0.55';
       }
     }
@@ -331,7 +317,16 @@ function VisualEditor({ openFile, service, repoConfig, onContentChange }: Visual
 }
 
 /* =========================================================
-   MAIN APP — unchanged
+   RESIZABLE PREVIEW CONSTANTS
+   ========================================================= */
+
+const PREVIEW_DEFAULT_WIDTH = 460;
+const PREVIEW_MIN_WIDTH = 300;
+const SIDEBAR_WIDTH = 256; // matches Sidebar.tsx's fixed w-64
+const EDITOR_MIN_WIDTH = 320; // editor must never be squeezed below this
+
+/* =========================================================
+   MAIN APP
    ========================================================= */
 
 export default function App() {
@@ -356,6 +351,12 @@ export default function App() {
   const [passphraseOk, setPassphraseOk] = useState(
     sessionStorage.getItem('tpml_gate') === TEAM_PASSPHRASE
   );
+
+  // ---- Preview toggle + resizable width state ----
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewWidth, setPreviewWidth] = useState(PREVIEW_DEFAULT_WIDTH);
+  const bodyRowRef = useRef<HTMLDivElement>(null);
+  const isDraggingRef = useRef(false);
 
   useEffect(() => {
     const savedToken = getToken();
@@ -517,6 +518,37 @@ export default function App() {
     setStatus(makeStatus(err.kind, err.message));
   }
 
+  // ---- Resizable divider — Pointer Events, cleans up its own listeners ----
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    isDraggingRef.current = true;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  }, []);
+
+  useEffect(() => {
+    function handlePointerMove(e: PointerEvent) {
+      if (!isDraggingRef.current || !bodyRowRef.current) return;
+      const rowRect = bodyRowRef.current.getBoundingClientRect();
+      // Distance from the pointer to the row's right edge = new preview width
+      const proposedWidth = rowRect.right - e.clientX;
+      const maxAllowed = Math.max(
+        PREVIEW_MIN_WIDTH,
+        rowRect.width - SIDEBAR_WIDTH - EDITOR_MIN_WIDTH
+      );
+      const clamped = Math.min(Math.max(proposedWidth, PREVIEW_MIN_WIDTH), maxAllowed);
+      setPreviewWidth(clamped);
+    }
+    function handlePointerUp() {
+      isDraggingRef.current = false;
+    }
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, []);
+
   const hasUnsavedChanges = !!openFile && openFile.currentContent !== openFile.originalContent;
 
   if (!passphraseOk) {
@@ -562,7 +594,7 @@ export default function App() {
         onDisconnect={handleDisconnect}
       />
 
-      <div className="flex-1 flex min-h-0">
+      <div ref={bodyRowRef} className="flex-1 flex min-h-0">
         <Sidebar
           service={getGitHubService(token)}
           repoConfig={repoConfig}
@@ -575,22 +607,33 @@ export default function App() {
 
         <div className="flex-1 flex flex-col min-w-0">
           {showModeToggle && (
-            <div className="h-9 flex items-center gap-1 px-3 border-b border-border bg-panelAlt shrink-0">
+            <div className="h-9 flex items-center justify-between px-3 border-b border-border bg-panelAlt shrink-0">
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setEditMode('visual')}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                    editMode === 'visual' ? 'bg-accent text-white' : 'text-text-secondary hover:bg-panel'
+                  }`}
+                >
+                  Visual
+                </button>
+                <button
+                  onClick={() => setEditMode('code')}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                    editMode === 'code' ? 'bg-accent text-white' : 'text-text-secondary hover:bg-panel'
+                  }`}
+                >
+                  Code
+                </button>
+              </div>
+
               <button
-                onClick={() => setEditMode('visual')}
+                onClick={() => setShowPreview((v) => !v)}
                 className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-                  editMode === 'visual' ? 'bg-accent text-white' : 'text-text-secondary hover:bg-panel'
+                  showPreview ? 'bg-accent text-white' : 'text-text-secondary hover:bg-panel'
                 }`}
               >
-                Visual
-              </button>
-              <button
-                onClick={() => setEditMode('code')}
-                className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-                  editMode === 'code' ? 'bg-accent text-white' : 'text-text-secondary hover:bg-panel'
-                }`}
-              >
-                Code
+                {showPreview ? 'Hide Preview' : 'Preview'}
               </button>
             </div>
           )}
@@ -607,7 +650,18 @@ export default function App() {
           )}
         </div>
 
-        <LivePreview openFile={openFile} service={getGitHubService(token)} repoConfig={repoConfig} />
+        {showPreview && (
+          <>
+            <div
+              onPointerDown={handlePointerDown}
+              className="w-1.5 shrink-0 cursor-col-resize bg-border hover:bg-accent transition-colors"
+              style={{ touchAction: 'none' }}
+            />
+            <div style={{ width: previewWidth }} className="shrink-0 flex">
+              <LivePreview openFile={openFile} service={getGitHubService(token)} repoConfig={repoConfig} />
+            </div>
+          </>
+        )}
       </div>
 
       <StatusPanel status={status} />
