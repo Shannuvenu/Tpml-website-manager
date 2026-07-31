@@ -9,6 +9,7 @@ interface FileExplorerProps {
   activePath: string | null;
   onOpenFile: (path: string, sha: string) => void;
   onError: (err: GitHubApiError) => void;
+  filterTerm?: string;
 }
 
 const ICON_PATHS: Record<IconKind, { path: string; color: string }> = {
@@ -41,9 +42,20 @@ interface TreeNodeProps {
   activePath: string | null;
   onOpenFile: (path: string, sha: string) => void;
   onError: (err: GitHubApiError) => void;
+  filterTerm?: string;
 }
 
-function TreeNode({ node, depth, service, repoConfig, activePath, onOpenFile, onError }: TreeNodeProps) {
+function TreeNode({ node, depth, service, repoConfig, activePath, onOpenFile, onError, filterTerm }: TreeNodeProps) {
+  const term = (filterTerm ?? '').trim().toLowerCase();
+
+  // A folder stays visible if ITS OWN name matches, OR if any already-loaded
+  // child matches — so filtering a nested match doesn't hide its parent folder.
+  function subtreeMatches(n: FileNode): boolean {
+    if (n.name.toLowerCase().includes(term)) return true;
+    return (n.children ?? []).some(subtreeMatches);
+  }
+  if (term && !subtreeMatches(node)) return null;
+
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<FileNode[] | undefined>(node.children);
   const [loading, setLoading] = useState(false);
@@ -54,7 +66,6 @@ function TreeNode({ node, depth, service, repoConfig, activePath, onOpenFile, on
       return;
     }
 
-    // Directory: expand/collapse, fetching children on first expand only.
     if (expanded) {
       setExpanded(false);
       return;
@@ -134,6 +145,7 @@ function TreeNode({ node, depth, service, repoConfig, activePath, onOpenFile, on
                 activePath={activePath}
                 onOpenFile={onOpenFile}
                 onError={onError}
+                filterTerm={filterTerm}
               />
             ))
           )}
@@ -143,7 +155,7 @@ function TreeNode({ node, depth, service, repoConfig, activePath, onOpenFile, on
   );
 }
 
-export default function FileExplorer({ service, repoConfig, activePath, onOpenFile, onError }: FileExplorerProps) {
+export default function FileExplorer({ service, repoConfig, activePath, onOpenFile, onError, filterTerm }: FileExplorerProps) {
   const [rootNodes, setRootNodes] = useState<FileNode[] | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -169,7 +181,6 @@ export default function FileExplorer({ service, repoConfig, activePath, onOpenFi
     }
   };
 
-  // Load the repository root once on mount.
   useEffect(() => {
     loadRoot();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -203,6 +214,7 @@ export default function FileExplorer({ service, repoConfig, activePath, onOpenFi
           activePath={activePath}
           onOpenFile={onOpenFile}
           onError={onError}
+          filterTerm={filterTerm}
         />
       ))}
     </div>

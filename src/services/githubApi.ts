@@ -10,11 +10,6 @@ import { utf8ToBase64 } from '../utils/base64';
 
 const GITHUB_API_BASE = 'https://api.github.com';
 
-/**
- * All GitHub REST calls are centralized here so components never talk to
- * axios directly. Every function throws a normalized GitHubApiError so the
- * UI can render one consistent message regardless of which call failed.
- */
 class GitHubService {
   private client: AxiosInstance;
 
@@ -29,7 +24,6 @@ class GitHubService {
     });
   }
 
-  /** GET /user — used purely to confirm the token is valid and to show "Connected as X". */
   async verifyToken(): Promise<GitHubUser> {
     try {
       const res = await this.client.get<GitHubUser>('/user');
@@ -39,11 +33,6 @@ class GitHubService {
     }
   }
 
-  /**
-   * Confirms the configured repo exists and the token can see it.
-   * Distinct from verifyToken() because a valid token can still lack
-   * access to a specific repo (404) or lack write scope (403).
-   */
   async verifyRepoAccess(config: RepoConfig): Promise<void> {
     try {
       await this.client.get(`/repos/${config.owner}/${config.repo}`);
@@ -52,11 +41,6 @@ class GitHubService {
     }
   }
 
-  /**
-   * Loads one directory level. GitHub's contents endpoint returns an array
-   * when `path` is a directory and a single object when it's a file, so the
-   * caller is expected to only invoke this for directories.
-   */
   async loadFolder(config: RepoConfig, path: string): Promise<GitHubContentItem[]> {
     try {
       const res = await this.client.get<GitHubContentItem[]>(
@@ -69,7 +53,6 @@ class GitHubService {
     }
   }
 
-  /** Loads a single file's content + sha. */
   async loadFile(config: RepoConfig, path: string): Promise<GitHubFileContent> {
     try {
       const res = await this.client.get<GitHubFileContent>(
@@ -85,12 +68,6 @@ class GitHubService {
     }
   }
 
-  /**
-   * Commits new content to an existing file. The `sha` MUST be the sha of
-   * the version currently open in the editor — if the file changed on
-   * GitHub since it was loaded, this call 409s (conflict) and the caller
-   * should prompt the user to reload before retrying.
-   */
   async commitFile(
     config: RepoConfig,
     path: string,
@@ -101,11 +78,6 @@ class GitHubService {
     return this.putContents(config, path, utf8ToBase64(content), message, sha);
   }
 
-  /**
-   * Creates a new binary file (e.g. an image) from content that is
-   * ALREADY base64-encoded. No sha is passed — this path is for creating
-   * a new file, not updating an existing one.
-   */
   async uploadBinaryFile(
     config: RepoConfig,
     path: string,
@@ -115,7 +87,46 @@ class GitHubService {
     return this.putContents(config, path, base64Content, message);
   }
 
-  /** Shared PUT logic behind both commitFile (update) and uploadBinaryFile (create). */
+  /**
+   * Replaces an EXISTING binary file (e.g. swapping a photo at the same
+   * path). Unlike uploadBinaryFile, this requires a sha — fetched fresh
+   * right before the write so it reflects the file's true current state,
+   * avoiding a stale-sha 409 if it changed since the page was opened.
+   */
+  async replaceBinaryFile(
+    config: RepoConfig,
+    path: string,
+    base64Content: string,
+    message: string
+  ): Promise<{ newSha: string }> {
+    const current = await this.loadFile(config, path);
+    return this.putContents(config, path, base64Content, message, current.sha);
+  }
+
+  /**
+   * Fetches recent commits for the repo, optionally filtered to one file's
+   * path. Read-only — used for "View History", not for any rollback yet.
+   */
+  async getCommitHistory(
+    config: RepoConfig,
+    path?: string,
+    perPage = 10
+  ): Promise<Array<{ sha: string; message: string; author: string; date: string }>> {
+    try {
+      const res = await this.client.get(`/repos/${config.owner}/${config.repo}/commits`, {
+        params: { sha: config.branch, path, per_page: perPage },
+      });
+      return (res.data as Array<Record<string, any>>).map((c) => ({
+        sha: (c.sha as string).slice(0, 7),
+        message: (c.commit?.message as string) ?? '(no message)',
+        author: (c.commit?.author?.name as string) ?? 'Unknown',
+        date: (c.commit?.author?.date as string) ?? '',
+      }));
+    } catch (err) {
+      throw this.normalizeError(err);
+    }
+  }
+
   private async putContents(
     config: RepoConfig,
     path: string,
@@ -151,7 +162,7 @@ class GitHubService {
           return {
             status,
             kind: 'auth-failed',
-            message: 'Authentication failed — the token is invalid, expired, or was revoked.',
+            message: 'Your GitHub session is no longer valid. Please reconnect.',
           };
         case 403:
           return {
@@ -159,21 +170,20 @@ class GitHubService {
             kind: 'auth-failed',
             message:
               githubMessage?.toLowerCase().includes('rate limit')
-                ? 'GitHub API rate limit exceeded. Wait a few minutes and try again.'
-                : 'Access forbidden — the token lacks permission for this repository or action.',
+                ? 'GitHub is temporarily limiting requests. Wait a few minutes and try again.'
+                : "You don't have permission to save changes to this repository. Ask the repository administrator for write access.",
           };
         case 404:
           return {
             status,
             kind: 'error',
-            message: 'Not found — check the repository name, branch, or file path.',
+            message: 'The requested file or repository could not be found.',
           };
         case 409:
           return {
             status,
             kind: 'conflict',
-            message:
-              'Conflict — this file changed on GitHub since it was opened. Reload it before saving again.',
+            message: 'This file was changed by someone else after you opened it. Reload the latest version before saving.',
           };
         case 422:
           return {
@@ -194,7 +204,7 @@ class GitHubService {
             return {
               status: null,
               kind: 'network-error',
-              message: 'Network error — check your internet connection.',
+              message: 'Unable to reach GitHub. Check your internet connection and try again.',
             };
           }
           return {
@@ -217,7 +227,6 @@ class GitHubService {
   }
 }
 
-/** GitHub paths can contain spaces/special chars; each segment needs encoding, not the slashes. */
 function encodeGitHubPath(path: string): string {
   return path.split('/').map(encodeURIComponent).join('/');
 }
@@ -225,7 +234,6 @@ function encodeGitHubPath(path: string): string {
 let instance: GitHubService | null = null;
 let instanceToken: string | null = null;
 
-/** Lazily creates the singleton service, recreating it if the token changed. */
 export function getGitHubService(token: string): GitHubService {
   if (!instance || instanceToken !== token) {
     instance = new GitHubService(token);

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { RepoConfig, GitHubApiError } from '../types/config';
 import type { GitHubService } from '../services/githubApi';
 import FileExplorer from './FileExplorer';
@@ -21,6 +22,8 @@ export default function Sidebar({
   refreshKey,
   onRefresh,
 }: SidebarProps) {
+  const [searchTerm, setSearchTerm] = useState('');
+
   return (
     <aside className="w-64 shrink-0 bg-panel border-r border-border flex flex-col overflow-hidden">
       <div className="h-9 flex items-center justify-between px-3 border-b border-border">
@@ -31,6 +34,14 @@ export default function Sidebar({
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M13.65 2.35a6.5 6.5 0 1 0 1.6 6.65 1 1 0 0 0-1.9-.6 4.5 4.5 0 1 1-1.1-4.65L10 5.9h4.5V1.4l-.85.95Z"/></svg>
         </button>
       </div>
+      <div className="px-2 py-1.5 border-b border-border">
+        <input
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Filter loaded files…"
+          className="w-full text-xs bg-canvas border border-border rounded px-2 py-1 text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
+        />
+      </div>
       <div className="flex-1 overflow-y-auto">
         <FileExplorer
           key={refreshKey}
@@ -39,6 +50,7 @@ export default function Sidebar({
           activePath={activePath}
           onOpenFile={onOpenFile}
           onError={onError}
+          filterTerm={searchTerm}
         />
       </div>
     </aside>

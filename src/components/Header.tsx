@@ -6,6 +6,7 @@ interface HeaderProps {
   hasUnsavedChanges: boolean;
   onCommitClick: () => void;
   onUploadClick: () => void;
+  onHistoryClick: () => void;
   onDisconnect: () => void;
 }
 
@@ -15,6 +16,7 @@ export default function Header({
   hasUnsavedChanges,
   onCommitClick,
   onUploadClick,
+  onHistoryClick,
   onDisconnect,
 }: HeaderProps) {
   return (
@@ -48,6 +50,14 @@ export default function Header({
         )}
 
         <button
+          onClick={onHistoryClick}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-text-secondary border border-border hover:bg-panel hover:text-text-primary transition-colors"
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 1 0 7 7 1 1 0 1 0-2 0 5 5 0 1 1-5-5v2l3-2.5L8 0.5V1Z"/></svg>
+          History
+        </button>
+
+        <button
           onClick={onUploadClick}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-text-secondary border border-border hover:bg-panel hover:text-text-primary transition-colors"
         >
@@ -63,7 +73,7 @@ export default function Header({
           <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
             <path d="M8 1a1 1 0 0 1 1 1v4h4a1 1 0 1 1 0 2H9v4a1 1 0 1 1-2 0V8H3a1 1 0 1 1 0-2h4V2a1 1 0 0 1 1-1Z" />
           </svg>
-          Commit
+          Save Changes
         </button>
 
         {user && (

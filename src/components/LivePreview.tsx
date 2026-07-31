@@ -8,11 +8,7 @@ interface LivePreviewProps {
   repoConfig: RepoConfig | null;
 }
 
-/* =========================================================
-   PATH HELPERS
-   ========================================================= */
-
-export function dirname(path: string): string {
+function dirname(path: string): string {
   const index = path.lastIndexOf('/');
   return index === -1 ? '' : path.slice(0, index);
 }
@@ -21,476 +17,157 @@ export function isExternalPath(path: string): boolean {
   return /^(https?:|data:|blob:|mailto:|tel:|#)/i.test(path);
 }
 
-/**
- * Example:
- *
- * baseDir = ""
- * relative = "./Content/css/home.css"
- *
- * result:
- * Content/css/home.css
- *
- *
- * baseDir = "pages"
- * relative = "../Content/css/home.css"
- *
- * result:
- * Content/css/home.css
- */
-export function resolveRelativePath(
-  baseDir: string,
-  relativePath: string
-): string {
+export function resolveRelativePath(baseDir: string, relativePath: string): string {
   if (isExternalPath(relativePath)) {
     return relativePath;
   }
-
-  const cleanPath = relativePath
-    .split('?')[0]
-    .split('#')[0];
-
-  const parts = [
-    ...(baseDir ? baseDir.split('/') : []),
-    ...cleanPath.split('/'),
-  ];
-
+  const cleanPath = relativePath.split('?')[0].split('#')[0];
+  const parts = [...(baseDir ? baseDir.split('/') : []), ...cleanPath.split('/')];
   const stack: string[] = [];
-
   for (const part of parts) {
-    if (!part || part === '.') {
-      continue;
-    }
-
-    if (part === '..') {
-      stack.pop();
-    } else {
-      stack.push(part);
-    }
+    if (!part || part === '.') continue;
+    if (part === '..') stack.pop();
+    else stack.push(part);
   }
-
   return stack.join('/');
 }
-
-/* =========================================================
-   FILE TYPE HELPERS
-   ========================================================= */
 
 export function isHtmlFile(path: string): boolean {
   return /\.html?$/i.test(path);
 }
 
-export function isCssFile(path: string): boolean {
+function isCssFile(path: string): boolean {
   return /\.css$/i.test(path);
 }
 
-export function isJsFile(path: string): boolean {
+function isJsFile(path: string): boolean {
   return /\.(js|jsx)$/i.test(path);
 }
 
-/* =========================================================
-   BASE64 DECODER
-   ========================================================= */
-
-export function decodeBase64(base64: string): string {
+function decodeBase64(base64: string): string {
   const cleaned = base64.replace(/\n/g, '');
-
   const binary = atob(cleaned);
-
   const bytes = new Uint8Array(binary.length);
-
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);
   }
-
   return new TextDecoder().decode(bytes);
 }
 
-/* =========================================================
-   EXTRACT CSS FILES FROM HTML
-
-   Supports BOTH:
-
-   <link rel="stylesheet" href="x.css">
-
-   AND
-
-   <link href="x.css" rel="stylesheet">
-
-   ========================================================= */
-
-export function extractStylesheets(html: string): string[] {
+function extractStylesheets(html: string): string[] {
   const results: string[] = [];
-
   const linkRegex = /<link\b[^>]*>/gi;
-
   let match: RegExpExecArray | null;
-
   while ((match = linkRegex.exec(html))) {
     const tag = match[0];
-
-    const relMatch = tag.match(
-      /\brel\s*=\s*["']([^"']+)["']/i
-    );
-
-    const hrefMatch = tag.match(
-      /\bhref\s*=\s*["']([^"']+)["']/i
-    );
-
-    if (
-      relMatch &&
-      hrefMatch &&
-      relMatch[1]
-        .toLowerCase()
-        .includes('stylesheet')
-    ) {
+    const relMatch = tag.match(/\brel\s*=\s*["']([^"']+)["']/i);
+    const hrefMatch = tag.match(/\bhref\s*=\s*["']([^"']+)["']/i);
+    if (relMatch && hrefMatch && relMatch[1].toLowerCase().includes('stylesheet')) {
       results.push(hrefMatch[1]);
     }
   }
-
   return results;
 }
 
-/* =========================================================
-   EXTRACT JS FILES FROM HTML
-   ========================================================= */
-
-export function extractScripts(html: string): string[] {
+function extractScripts(html: string): string[] {
   const results: string[] = [];
-
-  const scriptRegex =
-    /<script\b[^>]*src\s*=\s*["']([^"']+)["'][^>]*>\s*<\/script>/gi;
-
+  const scriptRegex = /<script\b[^>]*src\s*=\s*["']([^"']+)["'][^>]*>\s*<\/script>/gi;
   let match: RegExpExecArray | null;
-
   while ((match = scriptRegex.exec(html))) {
     results.push(match[1]);
   }
-
   return results;
 }
 
-/* =========================================================
-   REPLACE CSS <link> WITH <style>
-
-   Instead of:
-
-   <link href="./Content/css/home.css">
-
-   we fetch home.css using GitHub API and produce:
-
-   <style>
-      ...CSS...
-   </style>
-
-   ========================================================= */
-
-export function replaceStylesheets(
+function replaceStylesheets(
   html: string,
   pagePath: string,
   assets: Record<string, string>,
   openFile: OpenFile | null
 ): string {
   const pageDir = dirname(pagePath);
-
-  return html.replace(
-    /<link\b[^>]*>/gi,
-
-    (whole) => {
-      const relMatch = whole.match(
-        /\brel\s*=\s*["']([^"']+)["']/i
-      );
-
-      const hrefMatch = whole.match(
-        /\bhref\s*=\s*["']([^"']+)["']/i
-      );
-
-      /*
-       * Not a stylesheet.
-       *
-       * Example:
-       *
-       * <link rel="icon" href="favicon.ico">
-       */
-      if (
-        !relMatch ||
-        !hrefMatch ||
-        !relMatch[1]
-          .toLowerCase()
-          .includes('stylesheet')
-      ) {
-        return whole;
-      }
-
-      const href = hrefMatch[1];
-
-      /*
-       * External CSS such as:
-       *
-       * https://fonts.googleapis.com/...
-       *
-       * Leave it untouched.
-       */
-      if (isExternalPath(href)) {
-        return whole;
-      }
-
-      const resolvedPath =
-        resolveRelativePath(pageDir, href);
-
-      /*
-       * If this CSS file is currently open
-       * in Monaco, use the edited content.
-       *
-       * This gives us LIVE preview before
-       * committing to GitHub.
-       */
-      if (
-        openFile &&
-        openFile.path === resolvedPath &&
-        isCssFile(openFile.path)
-      ) {
-        return `
-<style data-preview-path="${resolvedPath}">
-${openFile.currentContent}
-</style>`;
-      }
-
-      /*
-       * Otherwise use the version fetched
-       * from GitHub.
-       */
-      const content = assets[resolvedPath];
-
-      if (content !== undefined) {
-        return `
-<style data-preview-path="${resolvedPath}">
-${content}
-</style>`;
-      }
-
-      console.warn(
-        'Preview CSS not found:',
-        href,
-        '→',
-        resolvedPath
-      );
-
-      return whole;
+  return html.replace(/<link\b[^>]*>/gi, (whole) => {
+    const relMatch = whole.match(/\brel\s*=\s*["']([^"']+)["']/i);
+    const hrefMatch = whole.match(/\bhref\s*=\s*["']([^"']+)["']/i);
+    if (!relMatch || !hrefMatch || !relMatch[1].toLowerCase().includes('stylesheet')) return whole;
+    const href = hrefMatch[1];
+    if (isExternalPath(href)) return whole;
+    const resolvedPath = resolveRelativePath(pageDir, href);
+    if (openFile && openFile.path === resolvedPath && isCssFile(openFile.path)) {
+      return `\n<style data-preview-path="${resolvedPath}">\n${openFile.currentContent}\n</style>`;
     }
-  );
+    const content = assets[resolvedPath];
+    if (content !== undefined) {
+      return `\n<style data-preview-path="${resolvedPath}">\n${content}\n</style>`;
+    }
+    console.warn('Preview CSS not found:', href, '→', resolvedPath);
+    return whole;
+  });
 }
 
-/* =========================================================
-   REPLACE LOCAL JS <script src=""> WITH INLINE JS
-   ========================================================= */
-
-export function replaceScripts(
+function replaceScripts(
   html: string,
   pagePath: string,
   assets: Record<string, string>,
   openFile: OpenFile | null
 ): string {
   const pageDir = dirname(pagePath);
-
-  return html.replace(
-    /<script\b[^>]*src\s*=\s*["']([^"']+)["'][^>]*>\s*<\/script>/gi,
-
-    (
-      whole,
-      src: string
-    ) => {
-      /*
-       * CDN scripts remain untouched.
-       *
-       * Example:
-       *
-       * https://code.jquery.com/jquery...
-       */
-      if (isExternalPath(src)) {
-        return whole;
-      }
-
-      const resolvedPath =
-        resolveRelativePath(pageDir, src);
-
-      /*
-       * If user is editing this JS file,
-       * use Monaco content.
-       */
-      if (
-        openFile &&
-        openFile.path === resolvedPath &&
-        isJsFile(openFile.path)
-      ) {
-        return `
-<script data-preview-path="${resolvedPath}">
-${openFile.currentContent}
-</script>`;
-      }
-
-      /*
-       * Otherwise use GitHub version.
-       */
-      const content = assets[resolvedPath];
-
-      if (content !== undefined) {
-        return `
-<script data-preview-path="${resolvedPath}">
-${content}
-</script>`;
-      }
-
-      console.warn(
-        'Preview JS not found:',
-        src,
-        '→',
-        resolvedPath
-      );
-
-      return whole;
+  return html.replace(/<script\b[^>]*src\s*=\s*["']([^"']+)["'][^>]*>\s*<\/script>/gi, (whole, src: string) => {
+    if (isExternalPath(src)) return whole;
+    const resolvedPath = resolveRelativePath(pageDir, src);
+    if (openFile && openFile.path === resolvedPath && isJsFile(openFile.path)) {
+      return `\n<script data-preview-path="${resolvedPath}">\n${openFile.currentContent}\n</script>`;
     }
-  );
+    const content = assets[resolvedPath];
+    if (content !== undefined) {
+      return `\n<script data-preview-path="${resolvedPath}">\n${content}\n</script>`;
+    }
+    console.warn('Preview JS not found:', src, '→', resolvedPath);
+    return whole;
+  });
 }
 
-/* =========================================================
-   BASE TAG
-
-   This helps paths such as:
-
-   ./Content/images/logo.png
-
-   resolve against the GitHub repository.
-   ========================================================= */
-
-export function injectBaseTag(
-  html: string,
-  repoConfig: RepoConfig,
-  pagePath: string
-): string {
+function injectBaseTag(html: string, repoConfig: RepoConfig, pagePath: string): string {
   const pageDir = dirname(pagePath);
-
-  const rawBase =
-    `https://raw.githubusercontent.com/` +
-    `${repoConfig.owner}/` +
-    `${repoConfig.repo}/` +
-    `${repoConfig.branch}/` +
-    `${pageDir ? `${pageDir}/` : ''}`;
-
-  const baseTag =
-    `<base href="${rawBase}">`;
-
-  /*
-   * Remove an existing base tag if the
-   * original HTML already has one.
-   */
-  let result = html.replace(
-    /<base\b[^>]*>/gi,
-    ''
-  );
-
+  const rawBase = `https://raw.githubusercontent.com/${repoConfig.owner}/${repoConfig.repo}/${repoConfig.branch}/${pageDir ? `${pageDir}/` : ''}`;
+  const baseTag = `<base href="${rawBase}">`;
+  let result = html.replace(/<base\b[^>]*>/gi, '');
   if (/<head[^>]*>/i.test(result)) {
-    result = result.replace(
-      /<head[^>]*>/i,
-      (head) =>
-        `${head}\n${baseTag}`
-    );
-
+    result = result.replace(/<head[^>]*>/i, (head) => `${head}\n${baseTag}`);
     return result;
   }
-
   return baseTag + result;
 }
 
-/* =========================================================
-   PREVENT NAVIGATION
-
-   We don't want clicking:
-
-   Careers
-   Contact
-   Brands
-
-   to leave our preview iframe.
-
-   ========================================================= */
-
-export function injectPreviewProtection(
-  html: string
-): string {
+function injectPreviewProtection(html: string): string {
   const script = `
 <script data-tpml-preview-protection>
-document.addEventListener(
-  'click',
-  function(event) {
-    var target = event.target;
-
-    if (!target) {
-      return;
-    }
-
-    var anchor = target.closest
-      ? target.closest('a')
-      : null;
-
-    if (anchor) {
-      event.preventDefault();
-    }
-  },
-  true
-);
+document.addEventListener('click', function(event) {
+  var target = event.target;
+  if (!target) return;
+  var anchor = target.closest ? target.closest('a') : null;
+  if (anchor) event.preventDefault();
+}, true);
 </script>
 `;
-
   if (/<\/body>/i.test(html)) {
-    return html.replace(
-      /<\/body>/i,
-      `${script}\n</body>`
-    );
+    return html.replace(/<\/body>/i, `${script}\n</body>`);
   }
-
   return html + script;
 }
-
-/* =========================================================
-   LOAD PAGE DEPENDENCIES (extracted for reuse)
-
-   Fetches every LOCAL stylesheet/script an HTML page
-   references, via the existing GitHubService. Pulled out of
-   the useEffect below so Visual Mode (added in a later file)
-   can trigger this same fetch on demand, without duplicating
-   the fetch/resolve logic.
-   ========================================================= */
 
 export async function loadPageDependencies(
   page: OpenFile,
   githubService: GitHubService,
   config: RepoConfig
 ): Promise<{ loaded: Record<string, string>; failedCount: number }> {
-
   const pageDir = dirname(page.path);
-
   const stylesheets = extractStylesheets(page.currentContent);
   const scripts = extractScripts(page.currentContent);
-
-  console.log('Preview stylesheets:', stylesheets);
-  console.log('Preview scripts:', scripts);
-
-  const dependencies = [
-    ...stylesheets,
-    ...scripts,
-  ];
-
-  const localDependencies = dependencies.filter(
-    (path) => !isExternalPath(path)
-  );
-
-  const resolvedPaths = localDependencies.map(
-    (path) => resolveRelativePath(pageDir, path)
-  );
-
+  const dependencies = [...stylesheets, ...scripts];
+  const localDependencies = dependencies.filter((path) => !isExternalPath(path));
+  const resolvedPaths = localDependencies.map((path) => resolveRelativePath(pageDir, path));
   const uniquePaths = Array.from(new Set(resolvedPaths));
-
-  console.log('Preview resolved dependencies:', uniquePaths);
 
   const loaded: Record<string, string> = {};
   let failedCount = 0;
@@ -500,7 +177,6 @@ export async function loadPageDependencies(
       try {
         const file = await githubService.loadFile(config, path);
         loaded[path] = decodeBase64(file.content);
-        console.log('Preview loaded:', path);
       } catch (loadError) {
         failedCount++;
         console.error('Preview failed to load:', path, loadError);
@@ -510,16 +186,6 @@ export async function loadPageDependencies(
 
   return { loaded, failedCount };
 }
-
-/* =========================================================
-   BUILD FINAL PREVIEW HTML (extracted for reuse)
-
-   Runs the same four-step pipeline the useMemo below always
-   ran: replace stylesheets → replace scripts → inject base
-   tag → inject navigation protection. Extracted so Visual
-   Mode can build an identically-assembled document from
-   whatever HTML string it's currently working with.
-   ========================================================= */
 
 export function buildPreviewHtml(
   html: string,
@@ -535,94 +201,25 @@ export function buildPreviewHtml(
   return result;
 }
 
-/* =========================================================
-   LIVE PREVIEW COMPONENT
-   ========================================================= */
+const VIEWPORT_WIDTHS = { desktop: null, tablet: 768, mobile: 390 } as const;
+type ViewportMode = keyof typeof VIEWPORT_WIDTHS;
 
-export default function LivePreview({
-  openFile,
-  service,
-  repoConfig,
-}: LivePreviewProps) {
-
-  /*
-   * IMPORTANT:
-   *
-   * previewPage and openFile are different.
-   *
-   * Example:
-   *
-   * previewPage = Home.html
-   *
-   * openFile =
-   * Content/css/home.css
-   *
-   * Monaco edits home.css,
-   * but preview remains Home.html.
-   */
-  const [
-    previewPage,
-    setPreviewPage,
-  ] = useState<OpenFile | null>(null);
-
-  /*
-   * Contains CSS + JS loaded from GitHub.
-   *
-   * Example:
-   *
-   * {
-   *   "Content/css/bootstrap.css": "...",
-   *   "Content/css/home.css": "...",
-   *   "Scripts/js/main.js": "..."
-   * }
-   */
-  const [
-    assets,
-    setAssets,
-  ] = useState<Record<string, string>>({});
-
-  const [
-    loading,
-    setLoading,
-  ] = useState(false);
-
-  const [
-    error,
-    setError,
-  ] = useState<string | null>(null);
-
-  /* =======================================================
-     WHEN HTML FILE IS OPENED
-     ======================================================= */
+export default function LivePreview({ openFile, service, repoConfig }: LivePreviewProps) {
+  const [previewPage, setPreviewPage] = useState<OpenFile | null>(null);
+  const [assets, setAssets] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [viewport, setViewport] = useState<ViewportMode>('desktop');
 
   useEffect(() => {
-    if (!openFile) {
-      return;
-    }
-
-    /*
-     * Opening HTML changes the page being
-     * previewed.
-     *
-     * Opening CSS/JS does NOT.
-     */
+    if (!openFile) return;
     if (isHtmlFile(openFile.path)) {
       setPreviewPage(openFile);
     }
-
   }, [openFile]);
 
-  /* =======================================================
-     LOAD PAGE DEPENDENCIES
-     ======================================================= */
-
   useEffect(() => {
-
-    if (
-      !previewPage ||
-      !service ||
-      !repoConfig
-    ) {
+    if (!previewPage || !service || !repoConfig) {
       setAssets({});
       return;
     }
@@ -633,189 +230,73 @@ export default function LivePreview({
     async function run() {
       setLoading(true);
       setError(null);
-
       try {
-        const { loaded, failedCount } = await loadPageDependencies(
-          previewPage as OpenFile,
-          githubService,
-          config
-        );
-
-        if (cancelled) {
-          return;
-        }
-
+        const { loaded, failedCount } = await loadPageDependencies(previewPage as OpenFile, githubService, config);
+        if (cancelled) return;
         setAssets(loaded);
-
         if (failedCount > 0) {
-          setError(
-            `${failedCount} preview dependency file(s) could not be loaded. Check the browser console.`
-          );
+          setError(`${failedCount} preview dependency file(s) could not be loaded. Check the browser console.`);
         }
-
       } catch (loadError) {
-
-        console.error(
-          'Preview dependency error:',
-          loadError
-        );
-
-        if (!cancelled) {
-          setError(
-            'Could not load page dependencies.'
-          );
-        }
-
+        console.error('Preview dependency error:', loadError);
+        if (!cancelled) setError('Could not load page dependencies.');
       } finally {
-
-        if (!cancelled) {
-          setLoading(false);
-        }
-
+        if (!cancelled) setLoading(false);
       }
     }
 
     void run();
-
     return () => {
       cancelled = true;
     };
-
-  }, [
-    previewPage?.path,
-    service,
-    repoConfig,
-  ]);
-
-  /* =======================================================
-     BUILD FINAL PREVIEW HTML
-     ======================================================= */
+  }, [previewPage?.path, service, repoConfig]);
 
   const srcDoc = useMemo(() => {
-
-    if (
-      !previewPage ||
-      !repoConfig
-    ) {
-      return '';
-    }
-
-    /*
-     * If user is editing Home.html itself,
-     * use Monaco's latest content.
-     *
-     * Otherwise use the remembered
-     * Home.html.
-     */
-    const html =
-      openFile?.path ===
-      previewPage.path
-
-        ? openFile.currentContent
-
-        : previewPage.currentContent;
-
-    return buildPreviewHtml(
-      html,
-      previewPage.path,
-      assets,
-      openFile,
-      repoConfig
-    );
-
-  }, [
-    previewPage,
-    assets,
-    openFile,
-    repoConfig,
-  ]);
-
-  /* =======================================================
-     REFRESH
-     ======================================================= */
+    if (!previewPage || !repoConfig) return '';
+    const html = openFile?.path === previewPage.path ? openFile.currentContent : previewPage.currentContent;
+    return buildPreviewHtml(html, previewPage.path, assets, openFile, repoConfig);
+  }, [previewPage, assets, openFile, repoConfig]);
 
   function refreshPreview() {
-
-    if (!previewPage) {
-      return;
-    }
-
-    /*
-     * New object reference forces preview
-     * state update.
-     */
-    setPreviewPage({
-      ...previewPage,
-    });
+    if (!previewPage) return;
+    setPreviewPage({ ...previewPage });
   }
-
-  /* =======================================================
-     OPEN PREVIEW IN NEW TAB
-     ======================================================= */
 
   function openInNewTab() {
-
-    if (!srcDoc) {
-      return;
-    }
-
-    const blob =
-      new Blob(
-        [srcDoc],
-        {
-          type: 'text/html',
-        }
-      );
-
-    const url =
-      URL.createObjectURL(blob);
-
-    window.open(
-      url,
-      '_blank',
-      'noopener,noreferrer'
-    );
-
-    window.setTimeout(
-      () => {
-        URL.revokeObjectURL(url);
-      },
-      10000
-    );
+    if (!srcDoc) return;
+    const blob = new Blob([srcDoc], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank', 'noopener,noreferrer');
+    window.setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
 
-  /* =======================================================
-     UI
-     ======================================================= */
-
   return (
-    <div className="w-[420px] shrink-0 border-l border-border flex flex-col bg-white">
-
-      {/* HEADER */}
-
+    <div className="w-full h-full shrink-0 border-l border-border flex flex-col bg-white">
       <div className="h-9 flex items-center justify-between px-3 border-b border-border bg-panelAlt shrink-0">
-
         <div className="min-w-0 flex items-center">
-
-          <span className="text-[11px] font-semibold tracking-wide text-text-muted uppercase">
-            Live Preview
-          </span>
-
+          <span className="text-[11px] font-semibold tracking-wide text-text-muted uppercase">Live Preview</span>
           {previewPage && (
-
-            <span
-              className="ml-2 text-[10px] text-text-secondary truncate"
-              title={previewPage.path}
-            >
+            <span className="ml-2 text-[10px] text-text-secondary truncate" title={previewPage.path}>
               {previewPage.path}
             </span>
-
           )}
+        </div>
 
+        <div className="flex items-center gap-1">
+          {(Object.keys(VIEWPORT_WIDTHS) as ViewportMode[]).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => setViewport(mode)}
+              className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${
+                viewport === mode ? 'bg-accent text-white' : 'text-text-secondary hover:bg-panel'
+              }`}
+            >
+              {mode}
+            </button>
+          ))}
         </div>
 
         <div className="flex items-center gap-3">
-
           <button
             type="button"
             onClick={refreshPreview}
@@ -825,81 +306,53 @@ export default function LivePreview({
           >
             ↻
           </button>
-
           <button
             type="button"
             onClick={openInNewTab}
-            disabled={
-              !srcDoc ||
-              loading
-            }
-            title={
-              loading
-                ? 'Waiting for dependencies…'
-                : 'Open preview in new tab'
-            }
+            disabled={!srcDoc || loading}
+            title={loading ? 'Waiting for dependencies…' : 'Open preview in new tab'}
             className="text-[11px] text-text-secondary hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Open ↗
           </button>
-
         </div>
-
       </div>
-
-      {/* LOADING */}
 
       {loading && (
-
         <div className="px-3 py-1.5 border-b border-border bg-panelAlt">
-
-          <p className="text-[10px] text-text-muted">
-            Loading page CSS and JavaScript…
-          </p>
-
+          <p className="text-[10px] text-text-muted">Loading page CSS and JavaScript…</p>
         </div>
-
       )}
-
-      {/* ERROR */}
 
       {error && (
-
         <div className="px-3 py-1.5 border-b border-border bg-panelAlt">
-
-          <p className="text-[10px] text-warning">
-            {error}
-          </p>
-
+          <p className="text-[10px] text-warning">{error}</p>
         </div>
-
       )}
 
-      {/* PREVIEW AREA */}
-
-      <div className="flex-1 min-h-0">
-
+      <div className="flex-1 min-h-0 overflow-auto bg-gray-100 flex justify-center">
         {!previewPage ? (
-
           <div className="h-full flex items-center justify-center text-xs text-gray-400 bg-canvas px-6 text-center">
-
             Open an HTML file such as Home.html to start the live preview.
-
           </div>
-
         ) : (
-
-          <iframe
-            title="Website live preview"
-            srcDoc={srcDoc}
-            sandbox="allow-scripts allow-same-origin allow-forms"
-            className="w-full h-full border-0 bg-white"
-          />
-
+          <div
+            style={
+              VIEWPORT_WIDTHS[viewport]
+                ? { width: VIEWPORT_WIDTHS[viewport]!, minWidth: VIEWPORT_WIDTHS[viewport]!, height: '100%' }
+                : { width: '100%', height: '100%' }
+            }
+            className="bg-white shadow-sm"
+          >
+            <iframe
+              title="Website live preview"
+              srcDoc={srcDoc}
+              sandbox="allow-scripts allow-same-origin allow-forms"
+              className="w-full h-full border-0 bg-white"
+            />
+          </div>
         )}
-
       </div>
-
     </div>
   );
 }

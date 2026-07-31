@@ -14,14 +14,21 @@ import { getLanguageFromPath } from './utils/fileHelpers';
 import { base64ToUtf8 } from './utils/base64';
 import type { GitHubUser, RepoConfig, OpenFile, StatusMessage, GitHubApiError } from './types/config';
 
+interface HistoryEntry {
+  sha: string;
+  message: string;
+  author: string;
+  date: string;
+}
+
 function makeStatus(kind: StatusMessage['kind'], text: string): StatusMessage {
   return { kind, text, timestamp: Date.now() };
 }
 
-const TEAM_PASSPHRASE = 'tpml-it-2026';
+const TEAM_PASSPHRASE = 'tpml-it-2026'; // change this — visible in the built JS, deters casual visitors only
 
 /* =========================================================
-   VISUAL EDITOR — unchanged from previous version
+   VISUAL EDITOR
    ========================================================= */
 
 const BLOCKED_TAGS = [
@@ -132,9 +139,10 @@ interface VisualEditorProps {
   service: GitHubService;
   repoConfig: RepoConfig;
   onContentChange: (next: string) => void;
+  onImageClick: (src: string, alt: string) => void;
 }
 
-function VisualEditor({ openFile, service, repoConfig, onContentChange }: VisualEditorProps) {
+function VisualEditor({ openFile, service, repoConfig, onContentChange, onImageClick }: VisualEditorProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [assets, setAssets] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -142,6 +150,42 @@ function VisualEditor({ openFile, service, repoConfig, onContentChange }: Visual
 
   const baselineRef = useRef(openFile.currentContent);
   const rangesRef = useRef<EditableRange[]>([]);
+
+  const [history, setHistory] = useState<{ past: string[]; present: string; future: string[] }>({
+    past: [],
+    present: openFile.currentContent,
+    future: [],
+  });
+
+  useEffect(() => {
+    setHistory({ past: [], present: openFile.currentContent, future: [] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openFile.path]);
+
+  function pushHistory(next: string) {
+    setHistory((h) => {
+      if (next === h.present) return h;
+      return { past: [...h.past, h.present], present: next, future: [] };
+    });
+  }
+
+  function undo() {
+    setHistory((h) => {
+      if (h.past.length === 0) return h;
+      const previous = h.past[h.past.length - 1];
+      onContentChange(previous);
+      return { past: h.past.slice(0, -1), present: previous, future: [h.present, ...h.future] };
+    });
+  }
+
+  function redo() {
+    setHistory((h) => {
+      if (h.future.length === 0) return h;
+      const next = h.future[0];
+      onContentChange(next);
+      return { past: [...h.past, h.present], present: next, future: h.future.slice(1) };
+    });
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -196,6 +240,7 @@ function VisualEditor({ openFile, service, repoConfig, onContentChange }: Visual
 
     baselineRef.current = updated;
     onContentChange(updated);
+    pushHistory(updated);
 
     if (el.innerHTML !== sanitized) el.innerHTML = sanitized;
   }
@@ -256,13 +301,37 @@ function VisualEditor({ openFile, service, repoConfig, onContentChange }: Visual
       });
       el.addEventListener('blur', () => handleSync(rangeIdx, el));
     });
+
+    const images = Array.from(doc.querySelectorAll('img'));
+    images.forEach((img) => {
+      img.style.cursor = 'pointer';
+      img.addEventListener('mouseenter', () => (img.style.outline = '2px dashed #5b8def'));
+      img.addEventListener('mouseleave', () => (img.style.outline = 'none'));
+      img.addEventListener('click', (e) => {
+        e.preventDefault();
+        onImageClick(img.getAttribute('src') ?? '', img.getAttribute('alt') ?? '');
+      });
+    });
   }
 
-  function exec(command: string, value?: string) {
+  useEffect(() => {
     const doc = iframeRef.current?.contentDocument;
     if (!doc) return;
-    doc.execCommand(command, false, value);
-  }
+    function handleKeyDown(e: KeyboardEvent) {
+      const ctrlOrCmd = e.ctrlKey || e.metaKey;
+      if (!ctrlOrCmd) return;
+      if (e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        redo();
+      }
+    }
+    doc.addEventListener('keydown', handleKeyDown);
+    return () => doc.removeEventListener('keydown', handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history]);
 
   function handleLink() {
     const doc = iframeRef.current?.contentDocument;
@@ -271,7 +340,13 @@ function VisualEditor({ openFile, service, repoConfig, onContentChange }: Visual
       return;
     }
     const url = window.prompt('Link URL:', 'https://');
-    if (url) exec('createLink', url);
+    if (url) doc.execCommand('createLink', false, url);
+  }
+
+  function exec(command: string) {
+    const doc = iframeRef.current?.contentDocument;
+    if (!doc) return;
+    doc.execCommand(command, false);
   }
 
   const toolbarButton = (label: string, onClick: () => void, title: string) => (
@@ -293,8 +368,24 @@ function VisualEditor({ openFile, service, repoConfig, onContentChange }: Visual
         {toolbarButton('U', () => exec('underline'), 'Underline')}
         {toolbarButton('Link', handleLink, 'Add link to selected text')}
         <span className="w-px h-4 bg-border mx-1" />
-        {toolbarButton('↶', () => exec('undo'), 'Undo')}
-        {toolbarButton('↷', () => exec('redo'), 'Redo')}
+        <button
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={undo}
+          disabled={history.past.length === 0}
+          title="Undo (Ctrl+Z)"
+          className="px-2.5 py-1 rounded text-xs font-medium text-text-secondary hover:bg-panel hover:text-text-primary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        >
+          Undo
+        </button>
+        <button
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={redo}
+          disabled={history.future.length === 0}
+          title="Redo (Ctrl+Y)"
+          className="px-2.5 py-1 rounded text-xs font-medium text-text-secondary hover:bg-panel hover:text-text-primary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        >
+          Redo
+        </button>
       </div>
 
       {(loading || warning) && (
@@ -316,18 +407,10 @@ function VisualEditor({ openFile, service, repoConfig, onContentChange }: Visual
   );
 }
 
-/* =========================================================
-   RESIZABLE PREVIEW CONSTANTS
-   ========================================================= */
-
 const PREVIEW_DEFAULT_WIDTH = 460;
 const PREVIEW_MIN_WIDTH = 300;
-const SIDEBAR_WIDTH = 256; // matches Sidebar.tsx's fixed w-64
-const EDITOR_MIN_WIDTH = 320; // editor must never be squeezed below this
-
-/* =========================================================
-   MAIN APP
-   ========================================================= */
+const SIDEBAR_WIDTH = 256;
+const EDITOR_MIN_WIDTH = 320;
 
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
@@ -352,11 +435,18 @@ export default function App() {
     sessionStorage.getItem('tpml_gate') === TEAM_PASSPHRASE
   );
 
-  // ---- Preview toggle + resizable width state ----
   const [showPreview, setShowPreview] = useState(false);
   const [previewWidth, setPreviewWidth] = useState(PREVIEW_DEFAULT_WIDTH);
   const bodyRowRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
+
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const [showImagePanel, setShowImagePanel] = useState(false);
+  const [imageEditTarget, setImageEditTarget] = useState<{ src: string; alt: string } | null>(null);
+  const [isReplacingImage, setIsReplacingImage] = useState(false);
 
   useEffect(() => {
     const savedToken = getToken();
@@ -419,7 +509,25 @@ export default function App() {
     }
   }
 
+  const hasUnsavedChanges = !!openFile && openFile.currentContent !== openFile.originalContent;
+
+  useEffect(() => {
+    function handleBeforeUnload(e: BeforeUnloadEvent) {
+      if (!hasUnsavedChanges) return;
+      e.preventDefault();
+      e.returnValue = '';
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
   function handleDisconnect() {
+    if (hasUnsavedChanges) {
+      const confirmed = window.confirm(
+        `You have unsaved changes in ${openFile?.path}. Disconnect anyway and lose them?`
+      );
+      if (!confirmed) return;
+    }
     clearAll();
     resetGitHubService();
     setToken(null);
@@ -468,7 +576,7 @@ export default function App() {
     if (!token || !repoConfig || !openFile) return;
 
     setIsSaving(true);
-    setStatus(makeStatus('saving', `Committing ${openFile.path}…`));
+    setStatus(makeStatus('saving', `Saving ${openFile.path}…`));
     try {
       const service = getGitHubService(token);
       const { newSha } = await service.commitFile(
@@ -484,7 +592,7 @@ export default function App() {
           ? { ...prev, sha: newSha, originalContent: prev.currentContent }
           : prev
       );
-      setStatus(makeStatus('commit-created', `Commit created for ${openFile.path}`));
+      setStatus(makeStatus('commit-created', 'Changes saved successfully.'));
       setShowCommitDialog(false);
     } catch (err) {
       const apiErr = err as GitHubApiError;
@@ -502,7 +610,7 @@ export default function App() {
     try {
       const service = getGitHubService(token);
       await service.uploadBinaryFile(repoConfig, path, base64Content, message);
-      setStatus(makeStatus('commit-created', `${path} uploaded and committed`));
+      setStatus(makeStatus('commit-created', `${path} uploaded and saved.`));
       setShowUploadDialog(false);
       setExplorerRefreshKey((k) => k + 1);
     } catch (err) {
@@ -518,7 +626,72 @@ export default function App() {
     setStatus(makeStatus(err.kind, err.message));
   }
 
-  // ---- Resizable divider — Pointer Events, cleans up its own listeners ----
+  async function handleViewHistory() {
+    if (!token || !repoConfig || !openFile) return;
+    setShowHistory(true);
+    setHistoryLoading(true);
+    try {
+      const service = getGitHubService(token);
+      const entries = await service.getCommitHistory(repoConfig, openFile.path);
+      setHistoryEntries(entries);
+    } catch (err) {
+      const apiErr = err as GitHubApiError;
+      setStatus(makeStatus(apiErr.kind, apiErr.message));
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  function handleAltTextSave(newAlt: string) {
+    if (!openFile || !imageEditTarget) return;
+    const escapedSrc = imageEditTarget.src.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const imgTagRe = new RegExp(`(<img[^>]*src=["']${escapedSrc}["'][^>]*?)(\\s+alt=["'][^"']*["'])?([^>]*>)`, 'i');
+    const updated = openFile.currentContent.replace(imgTagRe, (_whole, before, _oldAlt, after) => {
+      const safeAlt = newAlt.replace(/"/g, '&quot;');
+      return `${before} alt="${safeAlt}"${after}`;
+    });
+    handleEditorChange(updated);
+    setImageEditTarget((t) => (t ? { ...t, alt: newAlt } : t));
+  }
+
+  async function handleReplaceImage(file: File) {
+    if (!token || !repoConfig || !openFile || !imageEditTarget) return;
+    const confirmed = window.confirm(
+      `Replace the image at "${imageEditTarget.src}" with "${file.name}"? This immediately saves to GitHub — it does not wait for Save Changes.`
+    );
+    if (!confirmed) return;
+
+    setIsReplacingImage(true);
+    setStatus(makeStatus('saving', `Replacing ${imageEditTarget.src}…`));
+    try {
+      const reader = new FileReader();
+      const base64: string = await new Promise((resolve, reject) => {
+        reader.onload = () => {
+          const result = reader.result as string;
+          const comma = result.indexOf(',');
+          resolve(comma === -1 ? result : result.slice(comma + 1));
+        };
+        reader.onerror = () => reject(new Error('Could not read the file.'));
+        reader.readAsDataURL(file);
+      });
+
+      const dir = openFile.path.includes('/') ? openFile.path.slice(0, openFile.path.lastIndexOf('/')) : '';
+      const cleanRelative = imageEditTarget.src.replace(/^\.?\//, '');
+      const resolvedPath = dir ? `${dir}/${cleanRelative}` : cleanRelative;
+
+      const service = getGitHubService(token);
+      await service.replaceBinaryFile(repoConfig, resolvedPath, base64, `Replace image ${resolvedPath}`);
+      setStatus(makeStatus('commit-created', `${resolvedPath} replaced and saved.`));
+      setShowImagePanel(false);
+      setExplorerRefreshKey((k) => k + 1);
+    } catch (err) {
+      const apiErr = err as GitHubApiError;
+      setStatus(makeStatus(apiErr.kind, apiErr.message));
+    } finally {
+      setIsReplacingImage(false);
+    }
+  }
+
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     isDraggingRef.current = true;
@@ -529,7 +702,6 @@ export default function App() {
     function handlePointerMove(e: PointerEvent) {
       if (!isDraggingRef.current || !bodyRowRef.current) return;
       const rowRect = bodyRowRef.current.getBoundingClientRect();
-      // Distance from the pointer to the row's right edge = new preview width
       const proposedWidth = rowRect.right - e.clientX;
       const maxAllowed = Math.max(
         PREVIEW_MIN_WIDTH,
@@ -548,8 +720,6 @@ export default function App() {
       window.removeEventListener('pointerup', handlePointerUp);
     };
   }, []);
-
-  const hasUnsavedChanges = !!openFile && openFile.currentContent !== openFile.originalContent;
 
   if (!passphraseOk) {
     return (
@@ -591,6 +761,7 @@ export default function App() {
           setUploadError(null);
           setShowUploadDialog(true);
         }}
+        onHistoryClick={() => void handleViewHistory()}
         onDisconnect={handleDisconnect}
       />
 
@@ -644,6 +815,10 @@ export default function App() {
               service={getGitHubService(token)}
               repoConfig={repoConfig}
               onContentChange={handleEditorChange}
+              onImageClick={(src, alt) => {
+                setImageEditTarget({ src, alt });
+                setShowImagePanel(true);
+              }}
             />
           ) : (
             <MonacoEditor openFile={openFile} onChange={handleEditorChange} />
@@ -670,6 +845,8 @@ export default function App() {
         <CommitDialog
           filePath={openFile.path}
           isSaving={isSaving}
+          originalContent={openFile.originalContent}
+          currentContent={openFile.currentContent}
           onConfirm={(message) => void handleCommit(message)}
           onCancel={() => setShowCommitDialog(false)}
         />
@@ -682,6 +859,90 @@ export default function App() {
           onConfirm={(path, base64Content, message) => void handleUpload(path, base64Content, message)}
           onCancel={() => setShowUploadDialog(false)}
         />
+      )}
+
+      {showHistory && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowHistory(false)}>
+          <div className="w-[480px] max-h-[70vh] bg-panel border border-border rounded-lg shadow-xl flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-border">
+              <h2 className="text-sm font-semibold text-text-primary">Version history</h2>
+              <p className="text-xs text-text-secondary mt-1 font-mono truncate">{openFile?.path}</p>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+              {historyLoading && <p className="text-xs text-text-muted">Loading…</p>}
+              {!historyLoading && historyEntries.length === 0 && (
+                <p className="text-xs text-text-muted">No history found for this file.</p>
+              )}
+              {historyEntries.map((entry) => (
+                <div key={entry.sha} className="border border-border rounded-md p-3">
+                  <p className="text-sm text-text-primary">{entry.message}</p>
+                  <p className="text-[11px] text-text-muted mt-1">
+                    {entry.author} · {new Date(entry.date).toLocaleString()} · <span className="font-mono">{entry.sha}</span>
+                  </p>
+                </div>
+              ))}
+            </div>
+            <div className="px-5 py-4 border-t border-border flex justify-end">
+              <button
+                onClick={() => setShowHistory(false)}
+                className="px-3 py-1.5 rounded-md text-xs font-medium text-text-secondary hover:bg-panelAlt transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showImagePanel && imageEditTarget && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowImagePanel(false)}>
+          <div className="w-[420px] bg-panel border border-border rounded-lg shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-border">
+              <h2 className="text-sm font-semibold text-text-primary">Edit image</h2>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <img
+                src={imageEditTarget.src}
+                alt={imageEditTarget.alt}
+                className="max-h-40 rounded border border-border object-contain bg-canvas w-full"
+              />
+              <p className="text-[11px] text-text-muted font-mono break-all">{imageEditTarget.src}</p>
+
+              <div>
+                <label className="block text-xs font-medium text-text-secondary mb-1.5">Alt text</label>
+                <input
+                  value={imageEditTarget.alt}
+                  onChange={(e) => setImageEditTarget((t) => (t ? { ...t, alt: e.target.value } : t))}
+                  onBlur={(e) => handleAltTextSave(e.target.value)}
+                  className="w-full rounded-md bg-canvas border border-border px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-text-secondary mb-1.5">Replace image</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  disabled={isReplacingImage}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void handleReplaceImage(file);
+                  }}
+                  className="w-full text-xs text-text-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-medium file:bg-accent file:text-white hover:file:bg-accent-hover file:cursor-pointer"
+                />
+                {isReplacingImage && <p className="text-[11px] text-text-muted mt-1">Replacing…</p>}
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-border flex justify-end">
+              <button
+                onClick={() => setShowImagePanel(false)}
+                className="px-3 py-1.5 rounded-md text-xs font-medium text-text-secondary hover:bg-panelAlt transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
