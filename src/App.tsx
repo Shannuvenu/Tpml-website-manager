@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import MonacoEditor from './components/MonacoEditor';
-import LivePreview, { loadPageDependencies, buildPreviewHtml, isHtmlFile } from './components/LivePreview';
+import { loadPageDependencies, buildPreviewHtml, isHtmlFile } from './components/LivePreview';
 import CommitDialog from './components/CommitDialog';
 import UploadDialog from './components/UploadDialog';
 import StatusPanel from './components/StatusPanel';
@@ -407,10 +407,9 @@ function VisualEditor({ openFile, service, repoConfig, onContentChange, onImageC
   );
 }
 
-const PREVIEW_DEFAULT_WIDTH = 460;
-const PREVIEW_MIN_WIDTH = 300;
-const SIDEBAR_WIDTH = 256;
-const EDITOR_MIN_WIDTH = 320;
+/* =========================================================
+   MAIN APP
+   ========================================================= */
 
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
@@ -435,10 +434,7 @@ export default function App() {
     sessionStorage.getItem('tpml_gate') === TEAM_PASSPHRASE
   );
 
-  const [showPreview, setShowPreview] = useState(false);
-  const [previewWidth, setPreviewWidth] = useState(PREVIEW_DEFAULT_WIDTH);
-  const bodyRowRef = useRef<HTMLDivElement>(null);
-  const isDraggingRef = useRef(false);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
 
   const [showHistory, setShowHistory] = useState(false);
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
@@ -642,6 +638,35 @@ export default function App() {
     }
   }
 
+  /** Builds the full rendered page for the currently open HTML file and
+   *  opens it as a real browser tab — no inline panel, no resizing. Uses
+   *  the exact same asset-loading/build logic the old LivePreview panel
+   *  used, just triggered on click instead of mounted permanently. */
+  async function handlePreviewClick() {
+    if (!token || !repoConfig || !openFile) return;
+    if (!isHtmlFile(openFile.path)) {
+      setStatus(makeStatus('warn' as StatusMessage['kind'], 'Preview is only available for HTML pages.'));
+      return;
+    }
+    setIsPreviewLoading(true);
+    setStatus(makeStatus('loading-file', 'Building preview…'));
+    try {
+      const service = getGitHubService(token);
+      const { loaded } = await loadPageDependencies(openFile, service, repoConfig);
+      const srcDoc = buildPreviewHtml(openFile.currentContent, openFile.path, loaded, openFile, repoConfig);
+      const blob = new Blob([srcDoc], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      window.setTimeout(() => URL.revokeObjectURL(url), 10000);
+      setStatus(makeStatus('idle', 'Preview opened in a new tab.'));
+    } catch (err) {
+      const apiErr = err as GitHubApiError;
+      setStatus(makeStatus(apiErr.kind, apiErr.message));
+    } finally {
+      setIsPreviewLoading(false);
+    }
+  }
+
   function handleAltTextSave(newAlt: string) {
     if (!openFile || !imageEditTarget) return;
     const escapedSrc = imageEditTarget.src.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -692,35 +717,6 @@ export default function App() {
     }
   }
 
-  const handlePointerDown = useCallback((e: React.PointerEvent) => {
-    e.preventDefault();
-    isDraggingRef.current = true;
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-  }, []);
-
-  useEffect(() => {
-    function handlePointerMove(e: PointerEvent) {
-      if (!isDraggingRef.current || !bodyRowRef.current) return;
-      const rowRect = bodyRowRef.current.getBoundingClientRect();
-      const proposedWidth = rowRect.right - e.clientX;
-      const maxAllowed = Math.max(
-        PREVIEW_MIN_WIDTH,
-        rowRect.width - SIDEBAR_WIDTH - EDITOR_MIN_WIDTH
-      );
-      const clamped = Math.min(Math.max(proposedWidth, PREVIEW_MIN_WIDTH), maxAllowed);
-      setPreviewWidth(clamped);
-    }
-    function handlePointerUp() {
-      isDraggingRef.current = false;
-    }
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
-    return () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
-    };
-  }, []);
-
   if (!passphraseOk) {
     return (
       <div className="min-h-screen bg-canvas flex items-center justify-center">
@@ -765,7 +761,7 @@ export default function App() {
         onDisconnect={handleDisconnect}
       />
 
-      <div ref={bodyRowRef} className="flex-1 flex min-h-0">
+      <div className="flex-1 flex min-h-0">
         <Sidebar
           service={getGitHubService(token)}
           repoConfig={repoConfig}
@@ -799,12 +795,11 @@ export default function App() {
               </div>
 
               <button
-                onClick={() => setShowPreview((v) => !v)}
-                className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-                  showPreview ? 'bg-accent text-white' : 'text-text-secondary hover:bg-panel'
-                }`}
+                onClick={() => void handlePreviewClick()}
+                disabled={isPreviewLoading}
+                className="flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium text-text-secondary hover:bg-panel disabled:opacity-50 transition-colors"
               >
-                {showPreview ? 'Hide Preview' : 'Preview'}
+                {isPreviewLoading ? 'Opening…' : 'Preview ↗'}
               </button>
             </div>
           )}
@@ -824,19 +819,6 @@ export default function App() {
             <MonacoEditor openFile={openFile} onChange={handleEditorChange} />
           )}
         </div>
-
-        {showPreview && (
-          <>
-            <div
-              onPointerDown={handlePointerDown}
-              className="w-1.5 shrink-0 cursor-col-resize bg-border hover:bg-accent transition-colors"
-              style={{ touchAction: 'none' }}
-            />
-            <div style={{ width: previewWidth }} className="shrink-0 flex">
-              <LivePreview openFile={openFile} service={getGitHubService(token)} repoConfig={repoConfig} />
-            </div>
-          </>
-        )}
       </div>
 
       <StatusPanel status={status} />
