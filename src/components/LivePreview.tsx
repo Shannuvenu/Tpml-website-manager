@@ -12,12 +12,12 @@ interface LivePreviewProps {
    PATH HELPERS
    ========================================================= */
 
-function dirname(path: string): string {
+export function dirname(path: string): string {
   const index = path.lastIndexOf('/');
   return index === -1 ? '' : path.slice(0, index);
 }
 
-function isExternalPath(path: string): boolean {
+export function isExternalPath(path: string): boolean {
   return /^(https?:|data:|blob:|mailto:|tel:|#)/i.test(path);
 }
 
@@ -37,7 +37,7 @@ function isExternalPath(path: string): boolean {
  * result:
  * Content/css/home.css
  */
-function resolveRelativePath(
+export function resolveRelativePath(
   baseDir: string,
   relativePath: string
 ): string {
@@ -75,15 +75,15 @@ function resolveRelativePath(
    FILE TYPE HELPERS
    ========================================================= */
 
-function isHtmlFile(path: string): boolean {
+export function isHtmlFile(path: string): boolean {
   return /\.html?$/i.test(path);
 }
 
-function isCssFile(path: string): boolean {
+export function isCssFile(path: string): boolean {
   return /\.css$/i.test(path);
 }
 
-function isJsFile(path: string): boolean {
+export function isJsFile(path: string): boolean {
   return /\.(js|jsx)$/i.test(path);
 }
 
@@ -91,7 +91,7 @@ function isJsFile(path: string): boolean {
    BASE64 DECODER
    ========================================================= */
 
-function decodeBase64(base64: string): string {
+export function decodeBase64(base64: string): string {
   const cleaned = base64.replace(/\n/g, '');
 
   const binary = atob(cleaned);
@@ -118,7 +118,7 @@ function decodeBase64(base64: string): string {
 
    ========================================================= */
 
-function extractStylesheets(html: string): string[] {
+export function extractStylesheets(html: string): string[] {
   const results: string[] = [];
 
   const linkRegex = /<link\b[^>]*>/gi;
@@ -154,7 +154,7 @@ function extractStylesheets(html: string): string[] {
    EXTRACT JS FILES FROM HTML
    ========================================================= */
 
-function extractScripts(html: string): string[] {
+export function extractScripts(html: string): string[] {
   const results: string[] = [];
 
   const scriptRegex =
@@ -184,7 +184,7 @@ function extractScripts(html: string): string[] {
 
    ========================================================= */
 
-function replaceStylesheets(
+export function replaceStylesheets(
   html: string,
   pagePath: string,
   assets: Record<string, string>,
@@ -284,7 +284,7 @@ ${content}
    REPLACE LOCAL JS <script src=""> WITH INLINE JS
    ========================================================= */
 
-function replaceScripts(
+export function replaceScripts(
   html: string,
   pagePath: string,
   assets: Record<string, string>,
@@ -362,7 +362,7 @@ ${content}
    resolve against the GitHub repository.
    ========================================================= */
 
-function injectBaseTag(
+export function injectBaseTag(
   html: string,
   repoConfig: RepoConfig,
   pagePath: string
@@ -414,7 +414,7 @@ function injectBaseTag(
 
    ========================================================= */
 
-function injectPreviewProtection(
+export function injectPreviewProtection(
   html: string
 ): string {
   const script = `
@@ -449,6 +449,90 @@ document.addEventListener(
   }
 
   return html + script;
+}
+
+/* =========================================================
+   LOAD PAGE DEPENDENCIES (extracted for reuse)
+
+   Fetches every LOCAL stylesheet/script an HTML page
+   references, via the existing GitHubService. Pulled out of
+   the useEffect below so Visual Mode (added in a later file)
+   can trigger this same fetch on demand, without duplicating
+   the fetch/resolve logic.
+   ========================================================= */
+
+export async function loadPageDependencies(
+  page: OpenFile,
+  githubService: GitHubService,
+  config: RepoConfig
+): Promise<{ loaded: Record<string, string>; failedCount: number }> {
+
+  const pageDir = dirname(page.path);
+
+  const stylesheets = extractStylesheets(page.currentContent);
+  const scripts = extractScripts(page.currentContent);
+
+  console.log('Preview stylesheets:', stylesheets);
+  console.log('Preview scripts:', scripts);
+
+  const dependencies = [
+    ...stylesheets,
+    ...scripts,
+  ];
+
+  const localDependencies = dependencies.filter(
+    (path) => !isExternalPath(path)
+  );
+
+  const resolvedPaths = localDependencies.map(
+    (path) => resolveRelativePath(pageDir, path)
+  );
+
+  const uniquePaths = Array.from(new Set(resolvedPaths));
+
+  console.log('Preview resolved dependencies:', uniquePaths);
+
+  const loaded: Record<string, string> = {};
+  let failedCount = 0;
+
+  await Promise.all(
+    uniquePaths.map(async (path) => {
+      try {
+        const file = await githubService.loadFile(config, path);
+        loaded[path] = decodeBase64(file.content);
+        console.log('Preview loaded:', path);
+      } catch (loadError) {
+        failedCount++;
+        console.error('Preview failed to load:', path, loadError);
+      }
+    })
+  );
+
+  return { loaded, failedCount };
+}
+
+/* =========================================================
+   BUILD FINAL PREVIEW HTML (extracted for reuse)
+
+   Runs the same four-step pipeline the useMemo below always
+   ran: replace stylesheets → replace scripts → inject base
+   tag → inject navigation protection. Extracted so Visual
+   Mode can build an identically-assembled document from
+   whatever HTML string it's currently working with.
+   ========================================================= */
+
+export function buildPreviewHtml(
+  html: string,
+  pagePath: string,
+  assets: Record<string, string>,
+  openFile: OpenFile | null,
+  repoConfig: RepoConfig
+): string {
+  let result = replaceStylesheets(html, pagePath, assets, openFile);
+  result = replaceScripts(result, pagePath, assets, openFile);
+  result = injectBaseTag(result, repoConfig, pagePath);
+  result = injectPreviewProtection(result);
+  return result;
 }
 
 /* =========================================================
@@ -546,142 +630,15 @@ export default function LivePreview({
     const config = repoConfig;
     let cancelled = false;
 
-    async function loadDependencies() {
-
+    async function run() {
       setLoading(true);
       setError(null);
 
       try {
-
-        const page =
-          previewPage as OpenFile;
-
-        const pageDir =
-          dirname(page.path);
-
-        /*
-         * Find:
-         *
-         * bootstrap.css
-         * styles.css
-         * home.css
-         * jquery.js
-         * main.js
-         * etc.
-         */
-        const stylesheets =
-          extractStylesheets(
-            page.currentContent
-          );
-
-        const scripts =
-          extractScripts(
-            page.currentContent
-          );
-
-        console.log(
-          'Preview stylesheets:',
-          stylesheets
-        );
-
-        console.log(
-          'Preview scripts:',
-          scripts
-        );
-
-        /*
-         * Combine CSS + JS.
-         */
-        const dependencies = [
-          ...stylesheets,
-          ...scripts,
-        ];
-
-        /*
-         * Don't fetch CDN resources through
-         * GitHub API.
-         */
-        const localDependencies =
-          dependencies.filter(
-            (path) =>
-              !isExternalPath(path)
-          );
-
-        /*
-         * Convert:
-         *
-         * ./Content/css/home.css
-         *
-         * into:
-         *
-         * Content/css/home.css
-         */
-        const resolvedPaths =
-          localDependencies.map(
-            (path) =>
-              resolveRelativePath(
-                pageDir,
-                path
-              )
-          );
-
-        /*
-         * Remove duplicates.
-         */
-        const uniquePaths =
-          Array.from(
-            new Set(resolvedPaths)
-          );
-
-        console.log(
-          'Preview resolved dependencies:',
-          uniquePaths
-        );
-
-        const loaded:
-          Record<string, string> = {};
-
-        let failedCount = 0;
-
-        /*
-         * Fetch CSS + JS through the
-         * existing GitHubService.
-         */
-        await Promise.all(
-          uniquePaths.map(
-            async (path) => {
-
-              try {
-
-                const file =
-  await githubService.loadFile(
-    config,
-    path
-  );
-
-                loaded[path] =
-                  decodeBase64(
-                    file.content
-                  );
-
-                console.log(
-                  'Preview loaded:',
-                  path
-                );
-
-              } catch (loadError) {
-
-                failedCount++;
-
-                console.error(
-                  'Preview failed to load:',
-                  path,
-                  loadError
-                );
-
-              }
-            }
-          )
+        const { loaded, failedCount } = await loadPageDependencies(
+          previewPage as OpenFile,
+          githubService,
+          config
         );
 
         if (cancelled) {
@@ -718,7 +675,7 @@ export default function LivePreview({
       }
     }
 
-    void loadDependencies();
+    void run();
 
     return () => {
       cancelled = true;
@@ -750,7 +707,7 @@ export default function LivePreview({
      * Otherwise use the remembered
      * Home.html.
      */
-    let html =
+    const html =
       openFile?.path ===
       previewPage.path
 
@@ -758,54 +715,13 @@ export default function LivePreview({
 
         : previewPage.currentContent;
 
-    /*
-     * Replace local CSS files with
-     * fetched/in-memory CSS.
-     */
-    html =
-      replaceStylesheets(
-        html,
-        previewPage.path,
-        assets,
-        openFile
-      );
-
-    /*
-     * Replace local JS files with
-     * fetched/in-memory JS.
-     */
-    html =
-      replaceScripts(
-        html,
-        previewPage.path,
-        assets,
-        openFile
-      );
-
-    /*
-     * Helps remaining relative assets
-     * such as:
-     *
-     * images
-     * favicon
-     * etc.
-     */
-    html =
-      injectBaseTag(
-        html,
-        repoConfig,
-        previewPage.path
-      );
-
-    /*
-     * Stop navigation away from preview.
-     */
-    html =
-      injectPreviewProtection(
-        html
-      );
-
-    return html;
+    return buildPreviewHtml(
+      html,
+      previewPage.path,
+      assets,
+      openFile,
+      repoConfig
+    );
 
   }, [
     previewPage,
