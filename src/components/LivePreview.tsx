@@ -186,6 +186,20 @@ export async function loadPageDependencies(
 
   return { loaded, failedCount };
 }
+ function bustImageCache(html: string): string {
+   const version = Date.now();
+
+  return html.replace(
+    /(<img\b[^>]*src=["'])([^"']+)(["'][^>]*>)/gi,
+    (_, before, src, after) => {
+      if (isExternalPath(src)) return before + src + after;
+
+      const separator = src.includes("?") ? "&" : "?";
+      return before + src + separator + "v=" + version + after;
+    }
+  );
+}
+
 
 export function buildPreviewHtml(
   html: string,
@@ -194,10 +208,31 @@ export function buildPreviewHtml(
   openFile: OpenFile | null,
   repoConfig: RepoConfig
 ): string {
-  let result = replaceStylesheets(html, pagePath, assets, openFile);
-  result = replaceScripts(result, pagePath, assets, openFile);
-  result = injectBaseTag(result, repoConfig, pagePath);
+  let result = replaceStylesheets(
+    html,
+    pagePath,
+    assets,
+    openFile
+  );
+
+  result = replaceScripts(
+    result,
+    pagePath,
+    assets,
+    openFile
+  );
+
+  // Force browser to fetch a fresh image
+  result = bustImageCache(result);
+
+  result = injectBaseTag(
+    result,
+    repoConfig,
+    pagePath
+  );
+
   result = injectPreviewProtection(result);
+
   return result;
 }
 

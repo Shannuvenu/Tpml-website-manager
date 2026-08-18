@@ -2,17 +2,24 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import MonacoEditor from './components/MonacoEditor';
-import { loadPageDependencies, buildPreviewHtml, isHtmlFile } from './components/LivePreview';
+import {
+  loadPageDependencies,
+  buildPreviewHtml,
+  isHtmlFile
+} from './components/LivePreview';
 import CommitDialog from './components/CommitDialog';
 import UploadDialog from './components/UploadDialog';
 import StatusPanel from './components/StatusPanel';
 import ConnectScreen from './components/ConnectScreen';
+import EmployeeLogin, { decodeGoogleCredential, isAllowedEmail } from './components/EmployeeLogin.tsx';
+import { googleLogout } from '@react-oauth/google';
 import { getGitHubService, resetGitHubService } from './services/githubApi';
 import type { GitHubService } from './services/githubApi';
 import { getToken, saveToken, getRepoConfig, saveRepoConfig, clearAll } from './utils/tokenStorage';
 import { getLanguageFromPath } from './utils/fileHelpers';
 import { base64ToUtf8 } from './utils/base64';
 import type { GitHubUser, RepoConfig, OpenFile, StatusMessage, GitHubApiError } from './types/config';
+
 
 interface HistoryEntry {
   sha: string;
@@ -24,8 +31,6 @@ interface HistoryEntry {
 function makeStatus(kind: StatusMessage['kind'], text: string): StatusMessage {
   return { kind, text, timestamp: Date.now() };
 }
-
-const TEAM_PASSPHRASE = 'tpml-it-2026'; // change this — visible in the built JS, deters casual visitors only
 
 /* =========================================================
    VISUAL EDITOR
@@ -41,6 +46,24 @@ const BLOCKED_TAGS = [
 ];
 
 const INLINE_ALLOWED_TAGS = ['b', 'strong', 'i', 'em', 'u', 'a', 'br'];
+
+interface AccessEntry {
+  token: string;
+  owner: string;
+  repo: string;
+  branch: string;
+}
+
+// Parsed once at module load. If VITE_ACCESS_MAP is missing or invalid JSON,
+// falls back to an empty map rather than crashing the app.
+const ACCESS_MAP: Record<string, AccessEntry> = (() => {
+  try {
+    return JSON.parse(import.meta.env.VITE_ACCESS_MAP ?? '{}');
+  } catch {
+    console.error('VITE_ACCESS_MAP is not valid JSON.');
+    return {};
+  }
+})();
 
 interface EditableRange {
   tag: string;
@@ -309,7 +332,12 @@ function VisualEditor({ openFile, service, repoConfig, onContentChange, onImageC
       img.addEventListener('mouseleave', () => (img.style.outline = 'none'));
       img.addEventListener('click', (e) => {
         e.preventDefault();
-        onImageClick(img.getAttribute('src') ?? '', img.getAttribute('alt') ?? '');
+        const originalSrc =
+    img.getAttribute("src") ||
+    img.getAttribute("data-src") ||
+    "";
+
+onImageClick(originalSrc, img.getAttribute("alt") ?? "");
       });
     });
   }
@@ -413,6 +441,7 @@ function VisualEditor({ openFile, service, repoConfig, onContentChange, onImageC
 
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
+  const [autoConnectError, setAutoConnectError] = useState<string | null>(null);
   const [repoConfig, setRepoConfig] = useState<RepoConfig | null>(null);
   const [user, setUser] = useState<GitHubUser | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -430,9 +459,29 @@ export default function App() {
 
   const [status, setStatus] = useState<StatusMessage>(makeStatus('idle', 'Not connected'));
 
-  const [passphraseOk, setPassphraseOk] = useState(
-    sessionStorage.getItem('tpml_gate') === TEAM_PASSPHRASE
-  );
+  // Restores an existing Google session on refresh by re-checking the
+  // stored credential's expiry AND re-running the domain check — never
+  // trusting a plain boolean flag as proof of anything.
+  const [authorizedEmail, setAuthorizedEmail] = useState<string | null>(() => {
+    const stored = sessionStorage.getItem('tpml_google_credential');
+    if (!stored) return null;
+    const payload = decodeGoogleCredential(stored);
+    if (!payload) return null;
+    const notExpired = payload.exp * 1000 > Date.now();
+    if (notExpired && payload.email_verified && isAllowedEmail(payload.email)) {
+      return payload.email;
+    }
+    sessionStorage.removeItem('tpml_google_credential');
+    return null;
+  });
+
+  function handleGoogleSignOut() {
+    googleLogout();
+    sessionStorage.removeItem('tpml_google_credential');
+    setAuthorizedEmail(null);
+    // GitHub's own token/repo config is deliberately left untouched here —
+    // signing out of Google doesn't need to force re-entering a GitHub PAT.
+  }
 
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
 
@@ -700,11 +749,44 @@ export default function App() {
         reader.readAsDataURL(file);
       });
 
-      const dir = openFile.path.includes('/') ? openFile.path.slice(0, openFile.path.lastIndexOf('/')) : '';
-      const cleanRelative = imageEditTarget.src.replace(/^\.?\//, '');
-      const resolvedPath = dir ? `${dir}/${cleanRelative}` : cleanRelative;
+function resolveRelativePath(htmlFile: string, imageSrc: string): string {
+  let src = imageSrc
+    .replace(/^https?:\/\/[^/]+\//, "")
+    .split("?")[0]
+    .split("#")[0];
+
+  if (
+    src.startsWith("http") ||
+    src.startsWith("data:") ||
+    src.startsWith("//")
+  ) {
+    return src;
+  }
+
+  const htmlDir = htmlFile.includes("/")
+    ? htmlFile.substring(0, htmlFile.lastIndexOf("/"))
+    : "";
+
+  const stack = htmlDir ? htmlDir.split("/") : [];
+
+  src.split("/").forEach(part => {
+    if (part === "." || part === "") return;
+
+    if (part === "..") {
+      stack.pop();
+    } else {
+      stack.push(part);
+    }
+  });
+
+  return decodeURIComponent(stack.join("/"));
+}
 
       const service = getGitHubService(token);
+      const resolvedPath = resolveRelativePath(
+        openFile.path,
+        imageEditTarget.src
+      );
       await service.replaceBinaryFile(repoConfig, resolvedPath, base64, `Replace image ${resolvedPath}`);
       setStatus(makeStatus('commit-created', `${resolvedPath} replaced and saved.`));
       setShowImagePanel(false);
@@ -717,30 +799,63 @@ export default function App() {
     }
   }
 
-  if (!passphraseOk) {
+  if (!authorizedEmail) {
+    return (
+      <EmployeeLogin
+        onAuthorized={(email, credential) => {
+          sessionStorage.setItem('tpml_google_credential', credential);
+          setAuthorizedEmail(email);
+        }}
+      />
+    );
+  }
+
+  // Auto-connect: an authorized Google account is mapped straight to its
+  // GitHub token/repo — the manual ConnectScreen is skipped entirely.
+  if (!token || !repoConfig || !user) {
+    const entry = ACCESS_MAP[authorizedEmail.toLowerCase()];
+
+    if (!entry) {
+      return (
+        <div className="min-h-screen bg-canvas flex flex-col items-center justify-center px-4 text-center">
+          <p className="text-sm text-text-primary mb-2">No repository access is configured for your account yet.</p>
+          <p className="text-xs text-text-secondary mb-4">{authorizedEmail}</p>
+          <p className="text-xs text-text-muted mb-4">Ask IT to add your account to the access list.</p>
+          <button onClick={handleGoogleSignOut} className="text-xs text-accent underline">
+            Sign out
+          </button>
+        </div>
+      );
+    }
+
+    if (!isConnecting && !autoConnectError) {
+      void handleConnect(entry.token, entry.owner, entry.repo, entry.branch).catch(() => {
+        setAutoConnectError('Could not connect automatically. Contact IT.');
+      });
+    }
+
     return (
       <div className="min-h-screen bg-canvas flex items-center justify-center">
-        <div className="bg-panel border border-border rounded-lg p-6 w-80">
-          <p className="text-sm text-text-secondary mb-3">IT team access only</p>
-          <input
-            type="password"
-            placeholder="Team passphrase"
-            className="w-full rounded-md bg-canvas border border-border px-3 py-2 text-sm text-text-primary mb-3"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.target as HTMLInputElement).value === TEAM_PASSPHRASE) {
-                sessionStorage.setItem('tpml_gate', TEAM_PASSPHRASE);
-                setPassphraseOk(true);
-              }
-            }}
-          />
-        </div>
+        <p className="text-sm text-text-secondary">
+          {autoConnectError ?? connectError ?? 'Connecting…'}
+        </p>
       </div>
     );
   }
 
   if (!token || !repoConfig || !user) {
     return (
-      <ConnectScreen onConnect={handleConnect} isConnecting={isConnecting} error={connectError} />
+      <div className="min-h-screen flex flex-col">
+        <div className="flex justify-between items-center px-4 py-1.5 text-[11px] text-text-secondary bg-panelAlt border-b border-border">
+          <span>Signed in as <span className="text-text-primary">{authorizedEmail}</span></span>
+          <button onClick={handleGoogleSignOut} className="text-text-muted hover:text-text-primary underline">
+            Sign out
+          </button>
+        </div>
+        <div className="flex-1">
+          <ConnectScreen onConnect={handleConnect} isConnecting={isConnecting} error={connectError} />
+        </div>
+      </div>
     );
   }
 
@@ -748,6 +863,12 @@ export default function App() {
 
   return (
     <div className="h-screen flex flex-col bg-canvas">
+      <div className="flex justify-between items-center px-4 py-1 text-[11px] text-text-secondary bg-panelAlt border-b border-border shrink-0">
+        <span>Signed in as <span className="text-text-primary">{authorizedEmail}</span></span>
+        <button onClick={handleGoogleSignOut} className="text-text-muted hover:text-text-primary underline">
+          Sign out
+        </button>
+      </div>
       <Header
         user={user}
         repoConfig={repoConfig}

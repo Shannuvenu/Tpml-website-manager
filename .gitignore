@@ -29,3 +29,5 @@ Thumbs.db
 
 # Local files
 *.local
+
+type .gitignore
