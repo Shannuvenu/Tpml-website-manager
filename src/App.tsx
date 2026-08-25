@@ -48,14 +48,6 @@ const BLOCKED_TAGS = [
 
 const INLINE_ALLOWED_TAGS = ['b', 'strong', 'i', 'em', 'u', 'a', 'br'];
 
-interface AccessEntry {
-  token: string;
-  owner: string;
-  repo: string;
-  branch: string;
-}
-
-
 interface EditableRange {
   tag: string;
   start: number;
