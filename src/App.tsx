@@ -12,6 +12,7 @@ import UploadDialog from './components/UploadDialog';
 import StatusPanel from './components/StatusPanel';
 import ConnectScreen from './components/ConnectScreen';
 import EmployeeLogin, { decodeGoogleCredential, isAllowedEmail } from './components/EmployeeLogin.tsx';
+import { ACCESS_MAP } from './accessMap';
 import { googleLogout } from '@react-oauth/google';
 import { getGitHubService, resetGitHubService } from './services/githubApi';
 import type { GitHubService } from './services/githubApi';
@@ -54,16 +55,6 @@ interface AccessEntry {
   branch: string;
 }
 
-// Parsed once at module load. If VITE_ACCESS_MAP is missing or invalid JSON,
-// falls back to an empty map rather than crashing the app.
-const ACCESS_MAP: Record<string, AccessEntry> = (() => {
-  try {
-    return JSON.parse(import.meta.env.VITE_ACCESS_MAP ?? '{}');
-  } catch {
-    console.error('VITE_ACCESS_MAP is not valid JSON.');
-    return {};
-  }
-})();
 
 interface EditableRange {
   tag: string;
@@ -820,7 +811,9 @@ function resolveRelativePath(htmlFile: string, imageSrc: string): string {
         <div className="min-h-screen bg-canvas flex flex-col items-center justify-center px-4 text-center">
           <p className="text-sm text-text-primary mb-2">No repository access is configured for your account yet.</p>
           <p className="text-xs text-text-secondary mb-4">{authorizedEmail}</p>
-          <p className="text-xs text-text-muted mb-4">Ask IT to add your account to the access list.</p>
+          <p className="text-[10px] text-text-muted font-mono mb-4">
+            DEBUG: map length = {(import.meta.env.VITE_ACCESS_MAP ?? '').length}
+          </p>
           <button onClick={handleGoogleSignOut} className="text-xs text-accent underline">
             Sign out
           </button>

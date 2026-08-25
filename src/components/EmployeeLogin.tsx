@@ -28,9 +28,7 @@ export function isAllowedEmail(userEmail: string): boolean {
  * app: the token itself was handed to us directly by Google's own sign-in
  * flow in this browser session (never typed by the user), which is
  * meaningfully stronger than a plain email input box, but it is not the
- * same guarantee as server-side signature verification. See the security
- * notes in the setup instructions for what this does and doesn't protect
- * against.
+ * same guarantee as server-side signature verification.
  */
 export function decodeGoogleCredential(credential: string): GoogleIdTokenPayload | null {
   try {
@@ -109,6 +107,9 @@ export default function EmployeeLogin({ onAuthorized }: EmployeeLoginProps) {
         <div className="bg-panel border border-border rounded-lg p-6">
           <p className="text-sm text-text-secondary mb-5 text-center">
             Sign in with your Printers Mysore Google account to continue.
+          </p>
+          <p className="text-[10px] text-text-muted text-center mb-3 font-mono">
+            DEBUG: map length = {(import.meta.env.VITE_ACCESS_MAP ?? '').length}
           </p>
           <div className="flex justify-center">
             <GoogleLogin
