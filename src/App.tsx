@@ -10,8 +10,7 @@ import {
 import CommitDialog from './components/CommitDialog';
 import UploadDialog from './components/UploadDialog';
 import StatusPanel from './components/StatusPanel';
-import ConnectScreen from './components/ConnectScreen';
-import EmployeeLogin, { decodeGoogleCredential, isAllowedEmail } from './components/EmployeeLogin.tsx';
+import EmployeeLogin, { decodeGoogleCredential, isAllowedEmail } from './components/EmployeeLogin';
 import { ACCESS_MAP } from './accessMap';
 import { googleLogout } from '@react-oauth/google';
 import { getGitHubService, resetGitHubService } from './services/githubApi';
@@ -20,7 +19,6 @@ import { getToken, saveToken, getRepoConfig, saveRepoConfig, clearAll } from './
 import { getLanguageFromPath } from './utils/fileHelpers';
 import { base64ToUtf8 } from './utils/base64';
 import type { GitHubUser, RepoConfig, OpenFile, StatusMessage, GitHubApiError } from './types/config';
-
 
 interface HistoryEntry {
   sha: string;
@@ -31,6 +29,31 @@ interface HistoryEntry {
 
 function makeStatus(kind: StatusMessage['kind'], text: string): StatusMessage {
   return { kind, text, timestamp: Date.now() };
+}
+
+/** Resolves an <img> src (relative, absolute, or protocol-relative) against
+ *  the path of the HTML file that references it, into a repo-relative path
+ *  suitable for GitHub's Contents API. */
+function resolveRelativePath(htmlFile: string, imageSrc: string): string {
+  let src = imageSrc
+    .replace(/^https?:\/\/[^/]+\//, '')
+    .split('?')[0]
+    .split('#')[0];
+
+  if (src.startsWith('http') || src.startsWith('data:') || src.startsWith('//')) {
+    return src;
+  }
+
+  const htmlDir = htmlFile.includes('/') ? htmlFile.substring(0, htmlFile.lastIndexOf('/')) : '';
+  const stack = htmlDir ? htmlDir.split('/') : [];
+
+  src.split('/').forEach((part) => {
+    if (part === '.' || part === '') return;
+    if (part === '..') stack.pop();
+    else stack.push(part);
+  });
+
+  return decodeURIComponent(stack.join('/'));
 }
 
 /* =========================================================
@@ -315,12 +338,8 @@ function VisualEditor({ openFile, service, repoConfig, onContentChange, onImageC
       img.addEventListener('mouseleave', () => (img.style.outline = 'none'));
       img.addEventListener('click', (e) => {
         e.preventDefault();
-        const originalSrc =
-    img.getAttribute("src") ||
-    img.getAttribute("data-src") ||
-    "";
-
-onImageClick(originalSrc, img.getAttribute("alt") ?? "");
+        const originalSrc = img.getAttribute('src') || img.getAttribute('data-src') || '';
+        onImageClick(originalSrc, img.getAttribute('alt') ?? '');
       });
     });
   }
@@ -424,7 +443,6 @@ onImageClick(originalSrc, img.getAttribute("alt") ?? "");
 
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
-  const [autoConnectError, setAutoConnectError] = useState<string | null>(null);
   const [repoConfig, setRepoConfig] = useState<RepoConfig | null>(null);
   const [user, setUser] = useState<GitHubUser | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -458,10 +476,15 @@ export default function App() {
     return null;
   });
 
+  // Guards against re-triggering auto-connect on every re-render — only
+  // ever attempted once per signed-in email.
+  const autoConnectAttemptedRef = useRef<string | null>(null);
+
   function handleGoogleSignOut() {
     googleLogout();
     sessionStorage.removeItem('tpml_google_credential');
     setAuthorizedEmail(null);
+    autoConnectAttemptedRef.current = null;
     // GitHub's own token/repo config is deliberately left untouched here —
     // signing out of Google doesn't need to force re-entering a GitHub PAT.
   }
@@ -532,10 +555,24 @@ export default function App() {
       const apiErr = err as GitHubApiError;
       setConnectError(apiErr.message);
       setStatus(makeStatus(apiErr.kind, apiErr.message));
+      throw err; // re-thrown so the auto-connect effect below can react to failure
     } finally {
       setIsConnecting(false);
     }
   }
+
+  // Auto-connect: once an authorized Google account is known, look it up in
+  // ACCESS_MAP and connect automatically — runs exactly once per sign-in,
+  // in an effect (not during render), so it can't loop or fire repeatedly.
+  useEffect(() => {
+    if (!authorizedEmail || token || repoConfig || user) return;
+    const entry = ACCESS_MAP[authorizedEmail.toLowerCase()];
+    if (!entry) return;
+    if (autoConnectAttemptedRef.current === authorizedEmail) return;
+    autoConnectAttemptedRef.current = authorizedEmail;
+    void handleConnect(entry.token, entry.owner, entry.repo, entry.branch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authorizedEmail, token, repoConfig, user]);
 
   const hasUnsavedChanges = !!openFile && openFile.currentContent !== openFile.originalContent;
 
@@ -670,14 +707,10 @@ export default function App() {
     }
   }
 
-  /** Builds the full rendered page for the currently open HTML file and
-   *  opens it as a real browser tab — no inline panel, no resizing. Uses
-   *  the exact same asset-loading/build logic the old LivePreview panel
-   *  used, just triggered on click instead of mounted permanently. */
   async function handlePreviewClick() {
     if (!token || !repoConfig || !openFile) return;
     if (!isHtmlFile(openFile.path)) {
-      setStatus(makeStatus('warn' as StatusMessage['kind'], 'Preview is only available for HTML pages.'));
+      setStatus(makeStatus('error', 'Preview is only available for HTML pages.'));
       return;
     }
     setIsPreviewLoading(true);
@@ -732,44 +765,8 @@ export default function App() {
         reader.readAsDataURL(file);
       });
 
-function resolveRelativePath(htmlFile: string, imageSrc: string): string {
-  let src = imageSrc
-    .replace(/^https?:\/\/[^/]+\//, "")
-    .split("?")[0]
-    .split("#")[0];
-
-  if (
-    src.startsWith("http") ||
-    src.startsWith("data:") ||
-    src.startsWith("//")
-  ) {
-    return src;
-  }
-
-  const htmlDir = htmlFile.includes("/")
-    ? htmlFile.substring(0, htmlFile.lastIndexOf("/"))
-    : "";
-
-  const stack = htmlDir ? htmlDir.split("/") : [];
-
-  src.split("/").forEach(part => {
-    if (part === "." || part === "") return;
-
-    if (part === "..") {
-      stack.pop();
-    } else {
-      stack.push(part);
-    }
-  });
-
-  return decodeURIComponent(stack.join("/"));
-}
-
       const service = getGitHubService(token);
-      const resolvedPath = resolveRelativePath(
-        openFile.path,
-        imageEditTarget.src
-      );
+      const resolvedPath = resolveRelativePath(openFile.path, imageEditTarget.src);
       await service.replaceBinaryFile(repoConfig, resolvedPath, base64, `Replace image ${resolvedPath}`);
       setStatus(makeStatus('commit-created', `${resolvedPath} replaced and saved.`));
       setShowImagePanel(false);
@@ -793,8 +790,9 @@ function resolveRelativePath(htmlFile: string, imageSrc: string): string {
     );
   }
 
-  // Auto-connect: an authorized Google account is mapped straight to its
-  // GitHub token/repo — the manual ConnectScreen is skipped entirely.
+  // Auto-connect gate: an authorized Google account is mapped straight to
+  // its GitHub token/repo via ACCESS_MAP. The actual connect attempt is
+  // triggered from the useEffect above — this block only renders status.
   if (!token || !repoConfig || !user) {
     const entry = ACCESS_MAP[authorizedEmail.toLowerCase()];
 
@@ -803,9 +801,7 @@ function resolveRelativePath(htmlFile: string, imageSrc: string): string {
         <div className="min-h-screen bg-canvas flex flex-col items-center justify-center px-4 text-center">
           <p className="text-sm text-text-primary mb-2">No repository access is configured for your account yet.</p>
           <p className="text-xs text-text-secondary mb-4">{authorizedEmail}</p>
-          <p className="text-[10px] text-text-muted font-mono mb-4">
-            DEBUG: map length = {(import.meta.env.VITE_ACCESS_MAP ?? '').length}
-          </p>
+          <p className="text-xs text-text-muted mb-4">Ask IT to add your account to the access list.</p>
           <button onClick={handleGoogleSignOut} className="text-xs text-accent underline">
             Sign out
           </button>
@@ -813,33 +809,16 @@ function resolveRelativePath(htmlFile: string, imageSrc: string): string {
       );
     }
 
-    if (!isConnecting && !autoConnectError) {
-      void handleConnect(entry.token, entry.owner, entry.repo, entry.branch).catch(() => {
-        setAutoConnectError('Could not connect automatically. Contact IT.');
-      });
-    }
-
     return (
-      <div className="min-h-screen bg-canvas flex items-center justify-center">
-        <p className="text-sm text-text-secondary">
-          {autoConnectError ?? connectError ?? 'Connecting…'}
+      <div className="min-h-screen bg-canvas flex flex-col items-center justify-center px-4 text-center">
+        <p className="text-sm text-text-secondary mb-3">
+          {connectError ?? (isConnecting ? 'Connecting…' : 'Unable to connect.')}
         </p>
-      </div>
-    );
-  }
-
-  if (!token || !repoConfig || !user) {
-    return (
-      <div className="min-h-screen flex flex-col">
-        <div className="flex justify-between items-center px-4 py-1.5 text-[11px] text-text-secondary bg-panelAlt border-b border-border">
-          <span>Signed in as <span className="text-text-primary">{authorizedEmail}</span></span>
-          <button onClick={handleGoogleSignOut} className="text-text-muted hover:text-text-primary underline">
+        {connectError && (
+          <button onClick={handleGoogleSignOut} className="text-xs text-accent underline">
             Sign out
           </button>
-        </div>
-        <div className="flex-1">
-          <ConnectScreen onConnect={handleConnect} isConnecting={isConnecting} error={connectError} />
-        </div>
+        )}
       </div>
     );
   }
