@@ -445,7 +445,6 @@ export default function App() {
   const [token, setToken] = useState<string | null>(null);
   const [repoConfig, setRepoConfig] = useState<RepoConfig | null>(null);
   const [user, setUser] = useState<GitHubUser | null>(null);
-  const [isConnecting, setIsConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
 
   const [openFile, setOpenFile] = useState<OpenFile | null>(null);
@@ -509,7 +508,6 @@ export default function App() {
   }, []);
 
   async function reconnect(savedToken: string, config: RepoConfig) {
-    setIsConnecting(true);
     setStatus(makeStatus('connecting', 'Reconnecting…'));
     try {
       const service = getGitHubService(savedToken);
@@ -526,13 +524,10 @@ export default function App() {
       setConnectError(apiErr.message);
       setStatus(makeStatus(apiErr.kind, apiErr.message));
       clearAll();
-    } finally {
-      setIsConnecting(false);
     }
   }
 
   async function handleConnect(newToken: string, owner: string, repo: string, branch: string) {
-    setIsConnecting(true);
     setConnectError(null);
     setStatus(makeStatus('connecting', 'Connecting to GitHub…'));
 
@@ -556,8 +551,6 @@ export default function App() {
       setConnectError(apiErr.message);
       setStatus(makeStatus(apiErr.kind, apiErr.message));
       throw err; // re-thrown so the auto-connect effect below can react to failure
-    } finally {
-      setIsConnecting(false);
     }
   }
 
@@ -811,9 +804,7 @@ export default function App() {
 
     return (
       <div className="min-h-screen bg-canvas flex flex-col items-center justify-center px-4 text-center">
-        <p className="text-sm text-text-secondary mb-3">
-          {connectError ?? (isConnecting ? 'Connecting…' : 'Unable to connect.')}
-        </p>
+        <p className="text-sm text-text-secondary mb-3">{connectError ?? 'Connecting…'}</p>
         {connectError && (
           <button onClick={handleGoogleSignOut} className="text-xs text-accent underline">
             Sign out
