@@ -20,7 +20,7 @@ jobs:
       - run: npm install
       - run: npm run build
         env:
-          VITE_ACCESS_MAP: ${{ secrets.VITE_ACCESS_MAP }}
+          VITE_REPO_ACCESS: ${{ secrets.VITE_REPO_ACCESS }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
