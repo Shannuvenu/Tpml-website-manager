@@ -108,9 +108,6 @@ export default function EmployeeLogin({ onAuthorized }: EmployeeLoginProps) {
           <p className="text-sm text-text-secondary mb-5 text-center">
             Sign in with your Printers Mysore Google account to continue.
           </p>
-          <p className="text-[10px] text-text-muted text-center mb-3 font-mono">
-            DEBUG: map length = {(import.meta.env.VITE_ACCESS_MAP ?? '').length}
-          </p>
           <div className="flex justify-center">
             <GoogleLogin
               onSuccess={handleSuccess}

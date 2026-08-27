@@ -11,7 +11,7 @@ import CommitDialog from './components/CommitDialog';
 import UploadDialog from './components/UploadDialog';
 import StatusPanel from './components/StatusPanel';
 import EmployeeLogin, { decodeGoogleCredential, isAllowedEmail } from './components/EmployeeLogin';
-import { ACCESS_MAP } from './accessMap';
+import { REPO_ACCESS } from './accessMap';
 import { googleLogout } from '@react-oauth/google';
 import { getGitHubService, resetGitHubService } from './services/githubApi';
 import type { GitHubService } from './services/githubApi';
@@ -554,16 +554,16 @@ export default function App() {
     }
   }
 
-  // Auto-connect: once an authorized Google account is known, look it up in
-  // ACCESS_MAP and connect automatically — runs exactly once per sign-in,
-  // in an effect (not during render), so it can't loop or fire repeatedly.
+  // Auto-connect: once an authorized Google account is known, connect
+  // automatically using the one shared REPO_ACCESS config — runs exactly
+  // once per sign-in, in an effect (not during render), so it can't loop
+  // or fire repeatedly.
   useEffect(() => {
     if (!authorizedEmail || token || repoConfig || user) return;
-    const entry = ACCESS_MAP[authorizedEmail.toLowerCase()];
-    if (!entry) return;
+    if (!REPO_ACCESS) return;
     if (autoConnectAttemptedRef.current === authorizedEmail) return;
     autoConnectAttemptedRef.current = authorizedEmail;
-    void handleConnect(entry.token, entry.owner, entry.repo, entry.branch);
+    void handleConnect(REPO_ACCESS.token, REPO_ACCESS.owner, REPO_ACCESS.repo, REPO_ACCESS.branch);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authorizedEmail, token, repoConfig, user]);
 
@@ -783,18 +783,16 @@ export default function App() {
     );
   }
 
-  // Auto-connect gate: an authorized Google account is mapped straight to
-  // its GitHub token/repo via ACCESS_MAP. The actual connect attempt is
+  // Auto-connect gate: an authorized Google account connects automatically
+  // using the one shared REPO_ACCESS config. The actual connect attempt is
   // triggered from the useEffect above — this block only renders status.
   if (!token || !repoConfig || !user) {
-    const entry = ACCESS_MAP[authorizedEmail.toLowerCase()];
-
-    if (!entry) {
+    if (!REPO_ACCESS) {
       return (
         <div className="min-h-screen bg-canvas flex flex-col items-center justify-center px-4 text-center">
-          <p className="text-sm text-text-primary mb-2">No repository access is configured for your account yet.</p>
+          <p className="text-sm text-text-primary mb-2">GitHub access isn't configured for this app yet.</p>
           <p className="text-xs text-text-secondary mb-4">{authorizedEmail}</p>
-          <p className="text-xs text-text-muted mb-4">Ask IT to add your account to the access list.</p>
+          <p className="text-xs text-text-muted mb-4">Ask IT to set up VITE_REPO_ACCESS.</p>
           <button onClick={handleGoogleSignOut} className="text-xs text-accent underline">
             Sign out
           </button>
