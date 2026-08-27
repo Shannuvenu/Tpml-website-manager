@@ -15,7 +15,7 @@ import { REPO_ACCESS } from './accessMap';
 import { googleLogout } from '@react-oauth/google';
 import { getGitHubService, resetGitHubService } from './services/githubApi';
 import type { GitHubService } from './services/githubApi';
-import { getToken, saveToken, getRepoConfig, saveRepoConfig, clearAll } from './utils/tokenStorage';
+import { saveToken, saveRepoConfig, clearAll } from './utils/tokenStorage';
 import { getLanguageFromPath } from './utils/fileHelpers';
 import { base64ToUtf8 } from './utils/base64';
 import type { GitHubUser, RepoConfig, OpenFile, StatusMessage, GitHubApiError } from './types/config';
