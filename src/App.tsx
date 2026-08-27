@@ -499,33 +499,13 @@ export default function App() {
   const [isReplacingImage, setIsReplacingImage] = useState(false);
 
   useEffect(() => {
-    const savedToken = getToken();
-    const savedConfig = getRepoConfig();
-    if (savedToken && savedConfig) {
-      void reconnect(savedToken, savedConfig);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Anything saved in localStorage predates the shared REPO_ACCESS system
+    // or is leftover from testing. Trusting it caused a real bug: a browser
+    // could silently reconnect with a stale, wrong-permission token instead
+    // of the current shared one. Clear it unconditionally on load so
+    // REPO_ACCESS is always the single source of truth.
+    clearAll();
   }, []);
-
-  async function reconnect(savedToken: string, config: RepoConfig) {
-    setStatus(makeStatus('connecting', 'Reconnecting…'));
-    try {
-      const service = getGitHubService(savedToken);
-      const [verifiedUser] = await Promise.all([
-        service.verifyToken(),
-        service.verifyRepoAccess(config),
-      ]);
-      setUser(verifiedUser);
-      setToken(savedToken);
-      setRepoConfig(config);
-      setStatus(makeStatus('connected', `Connected as ${verifiedUser.login}`));
-    } catch (err) {
-      const apiErr = err as GitHubApiError;
-      setConnectError(apiErr.message);
-      setStatus(makeStatus(apiErr.kind, apiErr.message));
-      clearAll();
-    }
-  }
 
   async function handleConnect(newToken: string, owner: string, repo: string, branch: string) {
     setConnectError(null);
